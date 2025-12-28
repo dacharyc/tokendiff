@@ -3,8 +3,8 @@
 .vscode/
 
 # Built binaries
-/dwdiff
-/cmd/dwdiff/dwdiff
+/tokendiff
+/cmd/tokendiff/tokendiff
 
 # Test artifacts
 coverage.out

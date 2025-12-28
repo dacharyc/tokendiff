@@ -123,7 +123,7 @@ func diffTokensWithDiffx(tokens1, tokens2 []string) []Diff {
 	return diffxOpsToDiffs(ops, tokens1, tokens2)
 }
 
-// diffxOpsToDiffs converts diffx DiffOps to dwdiff Diffs.
+// diffxOpsToDiffs converts diffx DiffOps to tokendiff Diffs.
 func diffxOpsToDiffs(ops []diffx.DiffOp, tokens1, tokens2 []string) []Diff {
 	var result []Diff
 

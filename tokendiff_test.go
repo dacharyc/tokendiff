@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// TestDwdiffMotivatingExample tests the exact example from the dwdiff README
-// that motivated its creation. This is the key use case we must support.
+// TestMotivatingExample tests the exact example from the original dwdiff README
+// that motivated token-level diffing. This is the key use case we must support.
 // NOTE: Requires explicit delimiters since default delimiters are empty.
-func TestDwdiffMotivatingExample(t *testing.T) {
+func TestMotivatingExample(t *testing.T) {
 	old := "void someFunction(SomeType var)"
 	new := "void someFunction(SomeOtherType var)"
 

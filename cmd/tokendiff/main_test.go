@@ -706,7 +706,7 @@ func TestLineByLineDiffDetection(t *testing.T) {
 
 func TestFindConfigFile(t *testing.T) {
 	// Create a temp directory to use as home
-	tmpHome, err := os.MkdirTemp("", "dwdiff-test-home")
+	tmpHome, err := os.MkdirTemp("", "tokendiff-test-home")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
