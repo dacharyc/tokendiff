@@ -1,0 +1,621 @@
+   1:1    commit ad46a5c0d9f4b92d24d3a2c07570f65dd21483eb 97cfec101131551437441f4bce21d04566161c33
+   2:2    Author: dacharyc <dc@dacharycarey.com>
+   3:3    Date:   Fri Dec 26 09 10:4816:0714 2025 -0500
+   4:4    
+   5:5        Add hidden flag to config support git difftool use case and default font size
+   6:6    
+   7:7    diff --git a/README.md b/README.md
+   8:8    index 7f8b83d 4a2de37..4a2de3792b625b 100644
+   9:9    --- a/README.md
+  10:10   +++ b/README.md
+  11:11   @@ -1177,6 +117 +7,348 @@ # Remove all fenestra sockets ## Features
+  12:12    rm -rf ~ Display HTML from files or stdin
+  12:13    - Native macOS WebView
+  12:14    - Cmd+F find-in-page with highlight navigation
+  12:15   +- Zoom in/.fenestraout with Cmd+/Cmd-
+  13:16    ```+- Configurable default font size
+  13:17    - Sidebar for multiple files (files opened within 2 seconds are grouped together)
+  13:18    - Window ID mode for live content updates
+  13:19    - Dark mode support for UI elements
+  13:20   @@ -85,9 +87,33 @@ # The window finds the file by path, updates its content, and displays it
+  13:21    ## Keyboard Shortcuts
+  13:22    
+  13:23    - **Cmd+F** - Find in page
+  13:24   +- **Cmd+Plus** - Zoom in
+  13:25   +- **Cmd+Minus** - Zoom out
+  13:26   +- **Cmd+0** - Reset zoom to 100%
+  13:27    - **Cmd+W** - Close window
+  13:28    - **Cmd+Q** - Quit
+  14:29    
+  15:30   +## Architecture
+  16:30   +
+  17:30   +### Background Process Model Configuration
+  18:31   +
+  19:32   +Fenestra uses supports a background process model to ensure TOML configuration file following the CLI always exits immediately [XDG Base Directory](https://specifications.freedesktop.org/basedir- essential for integration with tools like `git difftool` that wait for each command to complete before proceedingspec/latest/) standard.
+  20:33   +
+  21:34   +When you run `fenestra`+**Location:
+  22:34   +1. The CLI checks for an existing** `$XDG_CONFIG_HOME/fenestra window (via Unix socket)
+  23:34   +2. If found, it sends the file via IPC and exits immediately
+  24:34   +3/config. If not found, it spawns the GUI as a background process, waits for the sockettoml` (defaults to be ready, then exits
+  25:34   +
+  26:34   +This means every `fenestra` invocation returns immediately, while windows run independently in the background `~/.config/fenestra/config.toml`)
+  27:35   +
+  28:36   +### Wails v2 Limitation
+  29:36   +
+  30:36   +Wails v2 only supports a single window per application process. This means each "window group" (files opened within 2 seconds) runs in its own process with its own Wails stack Example config.toml
+  31:37   +
+  32:38   +The original Swift version+```toml
+  32:39   +# Default font size in pixels (Fenestro0 or omit to use browser default) used a single-process architecture where one app managed multiple windows via NSDocument. This was more memory-efficient but macOS-specific.
+  32:40   +font_size = 18
+  32:41   +```
+  33:42   +
+  34:43   +### Future: Wails v3 Available Options
+  35:44   +
+  36:45   +[Wails v3](https://v3alpha.wails.io/whats| Option | Type | Default | Description |
+  36:46   +|-new/) introduces native multi-window support, which would allow fenestra to use a single-process daemon architecture:
+  37:46   +- One persistent process managing all windows
+  38:46   +- Lower memory footprint---|------|---------|-------------|
+  39:47   +- Simpler IPC (all windows| `font_size` | integer | 0 | Base font size in one process) pixels. Set to 0 to use browser default. |
+  40:48   +
+  41:49   +When Wails v3 reaches stable release, consider refactoring to this architecture. The relevant tracking issue is [wailsapp/wails#1480]+The font size setting works alongside zoom (https://github.com/wailsapp/wails/issuesCmd+/1480Cmd-) for additional flexibility.
+  42:50   +
+  43:51    ## History Development
+  44:52    
+  45:53    Fenestra is a rewrite of [Fenestro](https://github.com/masukomi/fenestro), originally written in Swift. This Go version uses Wails for native macOS WebView integration. ```bash
+  46:54   diff --git a/background_testapp.go b/background_testapp.go
+  46:55   index dd1bd62..69d5d48 100644
+  46:56   --- a/app.go
+  46:57   +++ b/app.go
+  46:58   @@ -13,6 +13,7 @@ type App struct {
+  46:59    	files        []FileEntry
+  46:60    	currentIndex int
+  46:61    	windowID     string
+  46:62   +	config       Config
+  46:63    	mu           sync.RWMutex
+  46:64    }
+  46:65    
+  46:66   @@ -22,6 +23,7 @@ func NewApp(file FileEntry, windowID string) *App {
+  46:67    		files:        []FileEntry{file},
+  46:68    		currentIndex: 0,
+  46:69    		windowID:     windowID,
+  46:70   +		config:       LoadConfig(),
+  46:71    	}
+  46:72    }
+  46:73    
+  46:74   @@ -147,3 +149,8 @@ func (a *App) ReplaceFileContent(path, content, name string) {
+  46:75    func (a *App) GetWindowID() string {
+  46:76    	return a.windowID
+  46:77    }
+  46:78   +
+  46:79   +// GetConfig returns the application configuration
+  46:80   +func (a *App) GetConfig() Config {
+  46:81   +	return a.config
+  46:82   +}
+  46:83   diff --git a/config.go b/config.go
+  47:84   new file mode 100644
+  48:85   index 0000000..185dedcedff37b
+  49:86   --- /dev/null
+  50:87   +++ b/background_testconfig.go
+  51:88   @@ -0,0 +1,23569 @@
+  52:89   +package main
+  53:90   +
+  54:91   +import (
+  55:92   +	"encoding/json"
+  56:92   +	"net"
+  57:92   +	"os"
+  58:93   +	"path/filepath"
+  59:94   +
+  59:95   +	"testing"
+  60:95   +	"timegithub.com/BurntSushi/toml"
+  61:96   +)
+  62:97   +
+  63:98   +// TestSocketPolling verifies Config holds the socket polling logic used in spawnGUIBackground application configuration
+  64:99   +func TestSocketPolling(t *testing.T)+type Config struct {
+  65:100  +	socketPath := filepath.Join(os.TempDir	// FontSize is the default font size in pixels (), "fenestra-test-pollinge.sock")
+  66:100  +	osg.Remove(socketPath, 16, 18, 24)
+  67:101  +	FontSize int `toml:"font_size"`
+  67:102  +}
+  67:103  +
+  68:104  +// Start a goroutine that creates DefaultConfig returns the socket after a delay default configuration values
+  69:105  +	go func+func DefaultConfig() Config {
+  70:106  +		time	return Config{
+  70:107  +		FontSize: 0, // 0 means use browser default
+  70:108  +	}
+  70:109  +}
+  70:110  +
+  70:111  +// getConfigDir returns the config directory following XDG Base Directory standard
+  70:112  +func getConfigDir() string {
+  70:113  +	// Check XDG_CONFIG_HOME first
+  70:114  +	if xdgConfigHome := os.SleepGetenv(100 * time"XDG_CONFIG_HOME"); xdgConfigHome != "" {
+  70:115  +		return filepath.MillisecondJoin(xdgConfigHome, "fenestra")
+  71:116  +		listener	}
+  71:117  +	// Fall back to ~/.config/fenestra
+  71:118  +	home, err := net os.ListenUserHomeDir("unix", socketPath)
+  72:119  +	if err != nil {
+  73:120  +			t.Errorf("Failed to create socket: %v", err)
+  74:120  +			return ""
+  75:121  +	}
+  76:122  +		defer listener	return filepath.CloseJoin(home, ".config", "fenestra")
+  77:123  +}
+  77:124  +
+  77:125  +// Keep socket alive for getConfigPath returns the test full path to the config file
+  77:126  +func getConfigPath() string {
+  78:127  +		time.Sleep	configDir := getConfigDir(500 * time.Millisecond)
+  79:128  +	if configDir == "" {
+  79:129  +		return ""
+  79:130  +	}
+  79:131  +	return filepath.Join(configDir, "config.toml")
+  80:132  +}
+  80:133  +
+  81:134  +// Poll for socket LoadConfig loads the configuration from the config file
+  81:135  +// Returns default config if file doesn't exist or can't be read
+  81:136  +func LoadConfig() Config {
+  81:137  +	config := DefaultConfig(simulating spawnGUIBackground logic)
+  82:138  +	deadline
+  82:139  +	configPath := time.Now().Add getConfigPath(1 * time.Second)
+  83:140  +	found :	if configPath = false
+  84:140  +	for time.Now().Before(deadline)= "" {
+  85:141  +		return config
+  85:142  +	}
+  85:143  +
+  85:144  +	// Check if config file exists
+  85:145  +	if _, err := os.Stat(socketPathconfigPath); os.IsNotExist(err) {
+  85:146  +		return config
+  85:147  +	}
+  85:148  +
+  85:149  +	// Parse the config file
+  85:150  +	if _, err := toml.DecodeFile(configPath, &config); err = != nil {
+  86:151  +			found = true		// Log error but continue with defaults
+  87:152  +			break		// Don't fail startup due to config issues
+  87:153  +		return DefaultConfig()
+  88:154  +	}
+  89:155  +		time
+  89:156  +	return config
+  89:157  +}
+  89:158  diff --git a/config_test.Sleepgo b/config_test.go
+  89:159  new file mode 100644
+  89:160  index 0000000..76bfcee
+  89:161  --- /dev/null
+  89:162  +++ b/config_test.go
+  89:163  @@ -0,0 +1,175 @@
+  89:164  +package main
+  89:165  +
+  89:166  +import (10 * time
+  89:167  +	"os"
+  89:168  +	"path/filepath"
+  89:169  +	"testing"
+  89:170  +)
+  89:171  +
+  89:172  +func TestDefaultConfig(t *testing.MillisecondT) {
+  89:173  +	config := DefaultConfig()
+  89:174  +	if config.FontSize != 0 {
+  89:175  +		t.Errorf("Expected default FontSize to be 0, got %d", config.FontSize)
+  90:176  +	}
+  91:177  +}
+  91:178  +
+  91:179  +func TestGetConfigDirWithXDGConfigHome(t *testing.T) {
+  91:180  +	// Save and restore XDG_CONFIG_HOME
+  91:181  +	original := os.Getenv("XDG_CONFIG_HOME")
+  91:182  +	defer os.Setenv("XDG_CONFIG_HOME", original)
+  91:183  +
+  92:184  +	os.Setenv("XDG_CONFIG_HOME", "/custom/config")
+  92:185  +	dir := getConfigDir()
+  92:186  +	expected := "/custom/config/fenestra"
+  92:187  +	if dir !found= expected {
+  93:188  +		t.ErrorErrorf("Socket polling failed to detect socket creationExpected %s, got %s", expected, dir)
+  94:189  +	}
+  95:190  +}
+  96:191  +
+  97:192  +// TestSocketPollingTimeout verifies polling times out correctly
+  98:192  +func TestSocketPollingTimeout TestGetConfigDirWithoutXDGConfigHome(t *testing.T) {
+  99:193  +	socketPath	// Save and restore XDG_CONFIG_HOME
+  99:194  +	original := filepath.Join(os.TempDirGetenv(), "fenestra-test-polling-timeout.sockXDG_CONFIG_HOME")
+ 100:195  +	defer os.Setenv("XDG_CONFIG_HOME", original)
+ 100:196  +
+ 100:197  +	os.RemoveUnsetenv("XDG_CONFIG_HOME")
+ 100:198  +	dir := getConfigDir(socketPath)
+ 101:199  +
+ 102:200  +	// Poll for non-existent socket with short timeout
+ 103:200  +	deadline := time.Now().Add(100 * time.Millisecond)
+ 104:200  +	found := false
+ 105:200  +	for time.Now().Before(deadline) {
+ 106:200  +		if _	home, err := os.StatUserHomeDir(socketPath);
+ 106:201  +	if err = != nil {
+ 107:202  +			found = true
+ 108:202  +			break		t.Fatalf("Could not get home dir: %v", err)
+ 109:203  +	}
+ 110:204  +		time	expected := filepath.SleepJoin(10 * timehome, ".Millisecondconfig", "fenestra")
+ 111:205  +	if dir != expected {
+ 111:206  +		t.Errorf("Expected %s, got %s", expected, dir)
+ 111:207  +	}
+ 111:208  +}
+ 112:209  +
+ 113:210  +func TestLoadConfigNoFile(t *testing.T) {
+ 113:211  +	// Save and restore XDG_CONFIG_HOME
+ 113:212  +	original := os.Getenv("XDG_CONFIG_HOME")
+ 113:213  +	defer os.Setenv("XDG_CONFIG_HOME", original)
+ 113:214  +
+ 113:215  +	// Point to a directory that doesn't exist
+ 113:216  +	os.Setenv("XDG_CONFIG_HOME", "/nonexistent/path")
+ 113:217  +	config := LoadConfig()
+ 113:218  +
+ 113:219  +	// Should return defaults
+ 113:220  +	if found config.FontSize != 0 {
+ 114:221  +		t.ErrorErrorf("Socket polling should have timed out for non-existent socketExpected default FontSize 0, got %d", config.FontSize)
+ 115:222  +	}
+ 116:223  +}
+ 117:224  +
+ 118:225  +// TestTempFileCreation verifies temp file is created with correct content
+ 119:225  +func TestTempFileCreation TestLoadConfigFromFile(t *testing.T) {
+ 120:226  +	content := "<html><body>Test content</body></html>"
+ 121:226  + Create temp directory
+ 122:227  +	tmpFile	tmpDir, err := os.CreateTempMkdirTemp("", "fenestra-*.htmlconfig-test")
+ 123:228  +	if err != nil {
+ 124:229  +		t.Fatalf("Failed toCould not create temp file dir: %v", err)
+ 125:230  +	}
+ 126:231  +	tmpPath := tmpFile.Name()
+ 127:231  +	defer os.RemoveRemoveAll(tmpPathtmpDir)
+ 128:232  +
+ 129:233  +	// Create config directory and file
+ 129:234  +	configDir := filepath.Join(tmpDir, "fenestra")
+ 129:235  +	if _, err := tmpFile os.WriteStringMkdirAll(contentconfigDir, 0755); err != nil {
+ 130:236  +		tmpFile.Close()
+ 131:236  +		t.Fatalf("Failed to write to temp fileCould not create config dir: %v", err)
+ 132:237  +	}
+ 133:238  +	tmpFile.Close()
+ 134:238  +
+ 135:239  +	// Verify content
+ 136:239  +	readContent, err	configPath := os filepath.ReadFileJoin(tmpPathconfigDir, "config.toml")
+ 137:240  +	configContent := `font_size = 24`
+ 137:241  +	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+ 138:242  +		t.Fatalf("Failed to read tempCould not write config file: %v", err)
+ 139:243  +	}
+ 140:244  +
+ 141:245  +	if string	// Save and restore XDG_CONFIG_HOME
+ 141:246  +	original := os.Getenv(readContent"XDG_CONFIG_HOME") != content {
+ 142:247  +		t	defer os.ErrorfSetenv("Content mismatch: got %q, want %qXDG_CONFIG_HOME", string(readContent original)
+ 142:248  +
+ 142:249  +	os.Setenv("XDG_CONFIG_HOME", content tmpDir)
+ 142:250  +	config := LoadConfig()
+ 143:251  +	}
+ 144:251  +
+ 145:252  +	// Verify file has fenestra prefix
+ 146:252  +	if !filepath.HasPrefix(filepath config.Base(tmpPath), "fenestra-")FontSize != 24 {
+ 147:253  +		t.Errorf("Temp file should have fenestra- prefixExpected FontSize 24, got %sd", filepath config.Base(tmpPath)FontSize)
+ 148:254  +	}
+ 149:255  +}
+ 150:256  +
+ 151:257  +// TestTempFileCleanup verifies temp file is removed after reading when --temp-file flag is used
+ 152:257  +func TestTempFileCleanup TestLoadConfigInvalidTOML(t *testing.T) {
+ 153:258  +	content := "<html><body>Cleanup test</body></html>"
+ 154:258  +
+ 155:258  +	// Create temp file (simulating what spawnGUIBackground does) directory
+ 156:259  +	tmpFile	tmpDir, err := os.CreateTempMkdirTemp("", "fenestra-*.htmlconfig-test")
+ 157:260  +	if err != nil {
+ 158:261  +		t.Fatalf("Failed toCould not create temp file dir: %v", err)
+ 159:262  +	}
+ 160:263  +	tmpPath := tmpFile	defer os.NameRemoveAll(tmpDir)
+ 161:264  +
+ 162:265  +	// Create config directory and file with invalid TOML
+ 162:266  +	configDir := filepath.Join(tmpDir, "fenestra")
+ 162:267  +	if _, err := tmpFile os.WriteStringMkdirAll(contentconfigDir, 0755); err != nil {
+ 163:268  +		tmpFile.Close()
+ 164:268  +		os.Remove(tmpPath)
+ 165:268  +		t.Fatalf("Failed to write temp fileCould not create config dir: %v", err)
+ 166:269  +	}
+ 167:270  +	tmpFile.Close()
+ 168:270  +
+ 169:271  +	// Simulate what the child process does with --temp-file flag:
+ 170:271  +	// Read content then delete
+ 171:271  +	readContent, err	configPath := os filepath.ReadFileJoin(tmpPathconfigDir, "config.toml")
+ 172:272  +	configContent := `this is not valid toml [`
+ 172:273  +	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+ 173:274  +		t.Fatalf("Failed to read tempCould not write config file: %v", err)
+ 174:275  +	}
+ 175:276  +
+ 176:277  +	if string(readContent) != content {	// Save and restore XDG_CONFIG_HOME
+ 177:278  +		t	original := os.ErrorfGetenv("Content mismatch before cleanupXDG_CONFIG_HOME")
+ 178:279  +	}	defer os.Setenv("XDG_CONFIG_HOME", original)
+ 179:280  +
+ 180:281  +	// Simulate cleanup (as done in main.go when tempFile flag is true)
+ 181:281  +	os.RemoveSetenv("XDG_CONFIG_HOME", tmpDir)
+ 181:282  +	config := LoadConfig(tmpPath)
+ 182:283  +
+ 183:284  +	// Verify file is gone Should return defaults on invalid TOML
+ 184:285  +	if _, err := os config.Stat(tmpPath);FontSize !os.IsNotExist(err)= 0 {
+ 185:286  +		t.ErrorErrorf("Temp file should have been removedExpected default FontSize 0 on invalid TOML, got %d", config.FontSize)
+ 186:287  +		os.Remove(tmpPath) // Cleanup if test failed
+ 187:287  +	}
+ 188:288  +}
+ 189:289  +
+ 190:290  +// TestSequentialCLISimulation simulates the sequential CLI invocation pattern
+ 191:290  +// that git difftool uses: each invocation should be able to connect to the socket
+ 192:290  +func TestSequentialCLISimulation TestLoadConfigPartialConfig(t *testing.T) {
+ 193:291  +	app := NewApp(FileEntry{Name: "initial", Content: "<html>initial</html>"}, "")
+ 194:291  +/ Create temp directory
+ 195:292  +	socketPath	tmpDir, err := filepath.Join(os.TempDirMkdirTemp()"", "fenestra-test-cliconfig-sim.socktest")
+ 196:293  +	os.Remove(socketPath)
+ 197:293  +
+ 198:293  +	server, err := NewIPCServer(app, socketPath, true) // Use timeout mode like sidebar
+ 199:293  +	if err != nil {
+ 200:294  +		t.Fatalf("NewIPCServer() failedCould not create temp dir: %v", err)
+ 201:295  +	}
+ 202:296  +	server.Start()
+ 203:296  +	defer server os.CloseRemoveAll(tmpDir)
+ 204:297  +
+ 205:298  +	// Simulate 3 sequential CLI invocations
+ 206:298  +	// Each one should:
+ 207:298  +	// 1. Find the socket exists (first one creates it, subsequent ones find it)
+ 208:298  +	// 2. Connect Create config directory and send file with only some options
+ 209:299  +	// 3. Exit (return) immediately
+ 210:299  +
+ 211:299  +	for i	configDir := 0; i < 3; i++ {
+ 212:299  +		// Verify socket exists filepath.Join(what CLI does before connectingtmpDir, "fenestra")
+ 213:300  +	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+ 214:300  +			t.Fatalf("Socket should exist for invocation %d", i)
+ 215:300  +		}
+ 216:300  +
+ 217:300  +		// Connect and send (simulating TrySendToSidebarInstance)
+ 218:300  +		conn, err := net.DialTimeoutMkdirAll("unix", socketPathconfigDir, 500*time.Millisecond 0755)
+ 219:300  +		if; err != nil {
+ 220:301  +		t.Fatalf("Invocation %d failed to connectCould not create config dir: %v", i, err)
+ 221:302  +	}
+ 222:303  +
+ 223:304  +		cmd	configPath := IPCCommand{
+ 224:304  +			Cmd: "add-file",
+ 225:304  +			Entry: FileEntry{
+ 226:304  +				Name:    "file" + string(rune('1'+i)) + " filepath.html",
+ 227:304  +				Path:    "/tmp/file" + string(runeJoin('1'+i)) + ".html"configDir,
+ 228:304  +				Content: "<html>File " + string(rune('1'+i)) + "</html>",
+ 229:304  +			},
+ 230:304  +		}
+ 231:304  +
+ 232:304  +		encoder := jsonconfig.NewEncoder(conntoml")
+ 233:305  +	// Empty config file - should use defaults
+ 233:306  +	configContent := `# empty config`
+ 233:307  +	if err := encoder os.EncodeWriteFile(cmdconfigPath, []byte(configContent), 0644); err != nil {
+ 234:308  +			conn.Close()
+ 235:308  +			t.Fatalf("Invocation %d failed to sendCould not write config file: %v", i, err)
+ 236:309  +	}
+ 237:310  +		conn.Close()
+ 238:310  +
+ 239:311  +	// Small delay between invocations Save and restore XDG_CONFIG_HOME
+ 239:312  +	original := os.Getenv(simulating real CLI timing"XDG_CONFIG_HOME")
+ 240:313  +		time	defer os.SleepSetenv(20 * time.Millisecond"XDG_CONFIG_HOME", original)
+ 241:314  +	}
+ 242:314  +
+ 243:315  +	// Give server time to process all files	os.Setenv("XDG_CONFIG_HOME", tmpDir)
+ 244:316  +	time.Sleep	config := LoadConfig(50 * time.Millisecond)
+ 245:317  +
+ 246:318  +	// Verify all files arrived
+ 247:318  +	files := app.GetFiles()
+ 248:318  +	expectedCount := 4 // initial + 3 added Should use default for unspecified options
+ 249:319  +	if len(files) config.FontSize != expectedCount 0 {
+ 250:320  +		t.Errorf("Expected %d files default FontSize 0, got %d", expectedCount, len(files) config.FontSize)
+ 251:321  +	}
+ 252:322  +}
+ 253:323  +
+ 254:324  +// TestFirstInvocationCreatesSocket verifies that the first invocation creates the socket
+ 255:324  +// and subsequent invocations can immediately connect
+ 256:324  +func TestFirstInvocationCreatesSocket TestGetConfig(t *testing.T) {
+ 257:325  +	socketPath := filepath.Join(os.TempDir(), "fenestra-test-first-invoke.sock")
+ 258:325  +	os.Remove(socketPath)
+ 259:325  +
+ 260:325  +	// Verify socket doesn't exist initially Save and restore XDG_CONFIG_HOME
+ 261:326  +	if _, err	original := os.Stat(socketPath); !os.IsNotExist(err) {
+ 262:326  +		t.FatalGetenv("Socket should not exist initiallyXDG_CONFIG_HOME")
+ 263:327  +	}	defer os.Setenv("XDG_CONFIG_HOME", original)
+ 264:328  +
+ 265:329  +	// Create app and server Point to nonexistent dir so we get defaults
+ 265:330  +	os.Setenv(simulating first invocation"XDG_CONFIG_HOME", "/nonexistent/path")
+ 266:331  +
+ 266:332  +	app := NewApp(FileEntry{Name: "firsttest", Content: "<html>first</html>"}, "")
+ 267:333  +	server, err	config := NewIPCServer(app, socketPath, true)
+ 268:333  +	if err != nil {
+ 269:333  +		t.Fatalf("NewIPCServer() failed: %v", err)
+ 270:333  +	}
+ 271:333  +	server.Start()
+ 272:333  +	defer server.CloseGetConfig()
+ 273:334  +
+ 274:335  +	// Socket should exist immediately after NewIPCServer (before Start even)
+ 275:335  +	// This is the guarantee that spawnGUIBackground relies on
+ 276:335  +	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+ 277:335  +		t.Error("Socket should exist immediately after NewIPCServer")
+ 278:335  +	}
+ 279:335  +
+ 280:335  +	// Subsequent invocation should be able to connect immediately
+ 281:335  +	conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+ 282:335  +	if err config.FontSize != nil 0 {
+ 283:336  +		t.FatalfErrorf("Subsequent invocation failed to connect:Expected default FontSize 0, got %vd", err config.FontSize)
+ 284:337  +	}
+ 285:338  +	conn.Close()
+ 286:338  +}
+ 287:339  diff --git a/frontend/main.gojs b/frontend/main.gojs
+ 288:340  index d03c4b1 0a95d54..14d90b0612672c 100644
+ 289:341  --- a/frontend/main.gojs
+ 290:342  +++ b/frontend/main.go
+ 291:342  @@ -6,7 +6,10 @@
+ 292:342   	"fmt"
+ 293:342   	"io"
+ 294:342   	"os"
+ 295:342  +	"os/exec"
+ 296:342   	"path/filepath"
+ 297:342  +	"syscall"
+ 298:342  +	"time"
+ 299:342   
+ 300:342   	"github.com/google/uuid"
+ 301:342   	flag "github.com/spf13/pflag"
+ 302:342  @@ -26,6 +29,8 @@
+ 303:342   	displayName string
+ 304:342   	windowID    string
+ 305:342   	showVersion bool
+ 306:342  +	internalGUI bool // Hidden flag: run as GUI subprocess
+ 307:342  +	tempFile    bool // Hidden flag: delete file after reading (for stdin content)
+ 308:342   )
+ 309:342   
+ 310:342   func init() {
+ 311:342  @@ -33,6 +38,10 @@ func init() {
+ 312:342   	flag.StringVarP(&displayName, "name", "n", "", "Display name for the window title")
+ 313:342   	flag.StringVar(&windowID, "id", "", "Window ID: use 'new' to generate ID, or provide existing UUID to target that window")
+ 314:342   	flag.BoolVarP(&showVersion, "version", "v", false, "Show version")
+ 315:342  +	flag.BoolVar(&internalGUI, "internal-gui", false, "Internal: run as GUI subprocess")
+ 316:342  +	flag.BoolVar(&tempFile, "temp-file", false, "Internal: delete file after reading")
+ 317:342  +	flag.CommandLine.MarkHidden("internal-gui")
+ 318:342  +	flag.CommandLine.MarkHidden("temp-file")
+ 319:342   }
+ 320:342   
+ 321:342   func main() {
+ 322:342  @@ -45,6 +54,7 @@ func main() {
+ 323:342   
+ 324:342   	// Determine content source and create FileEntry
+ 325:342   	var entry FileEntry
+ 326:342  +	var fromStdin bool
+ 327:342   
+ 328:342   	if filePath != "" {
+ 329:342   		// Load from file pathjs
+ 330:343  @@ -66328,6 +768 +328,1021 @@ func main() {
+ 331:343   		if entry.Name == "" {
+ 332:343   			entry.Name = filepath.Base(filePath)
+ 333:344           }
+ 334:345  +		// If this was a temp file (from stdin in parent), clean it up after reading
+ 335:345  +		if tempFile {
+ 336:345  +			os.Remove(absPath)
+ 337:345  +		}
+ 338:345   	} else if !isTerminal(os.Stdin) {
+ 339:345   		// Read from stdin
+ 340:345   		content, err := io.ReadAll(os.Stdin)
+ 341:345  @@ -81,6 +95,7 @@ func main() {
+ 342:345   		if entry.Name == "" {
+ 343:345   			entry.Name = "stdin"
+ 344:345   		}
+ 345:345  +		fromStdin = true
+ 346:345   	} else {
+ 347:345   		// No input provided
+ 348:345   		fmt.Println("Usage: fenestra [-p path] [-n name] [-id [window-id]]")
+ 349:345  @@ -104,15 +119,22 @@ func main() {
+ 350:345   	// Check if we're using window ID mode
+ 351:345   	isWindowIDMode := windowID != "";
+ 352:346   
+ 353:347  +    // Handle window ID "new" - generate UUID before any IPC or spawning
+ 354:347  +	if isWindowIDMode && windowID == "new" {
+ 355:347  +		windowID = uuid.New().String()
+ 356:347  +		fmt.Println(windowID)
+ 357:347  +	}
+ 358:347  +
+ 359:347  +	// If this is the GUI subprocess, run the GUI directly
+ 360:347  +	if internalGUI {
+ 361:347  +		runGUI(entry, windowID, isWindowIDMode)
+ 362:347  +		return
+ 363:347  +	}
+ 364:347  +
+ 365:347  +	// CLI invocation - try to send to existing instance first
+ 366:347   	if isWindowIDMode {
+ 367:347  -		// Window ID mode
+ 368:347  -		if windowID == "new" {
+ 369:347  -			// Generate new window ID
+ 370:347  -			windowID = uuid.New().String()
+ 371:347  -			// Print the ID to stdout for the caller to capture
+ 372:347  -			fmt.Println(windowID)
+ 373:347  -		} else {
+ 374:347  -			// Validate that window ID is a valid UUID
+ 375:347  +		if windowID != "" { Load and apply configuration
+ 376:348  +			// Validate UUID format (skip if we just generated it above)
+ 377:348   			if _, err := uuid.Parse(windowID); err != nil {
+ 378:348   				fmt.Fprintf(os.Stderr, "Error: Invalid window ID format (expected UUID): %s\n", windowID)
+ 379:348   				os.Exit(1)
+ 380:348  @@ -121,7 +143,6 @@ func main() {
+ 381:348   			if TrySendToWindowInstance(windowID, entry) {
+ 382:348   				os.Exit(0)
+ 383:348   			}
+ 384:348  -			// Window doesn't exist, create new one with that ID
+ 385:348   		}
+ 386:348   	} else {
+ 387:348   		// Sidebar mode - try to send to existing instance
+ 388:348  @@ -130,6 +151,83 @@ func main    async function loadConfig() {
+ 389:349   		}
+ 390:349   	}
+ 391:349   
+ 392:349  +	// No existing instance - spawn GUI in background and exit
+ 393:349  +	if err := spawnGUIBackground(entry, windowID, fromStdin); err != nil {
+ 394:349  +		fmt.Fprintf(os.Stderr, "Error spawning GUI: %v\n", err)
+ 395:349  +		os.Exit(1)
+ 396:349  +	}
+ 397:349  +	os.Exit(0)
+ 398:349  +}
+ 399:349  +
+ 400:349  +// spawnGUIBackground spawns the GUI as a background process and waits for the socket to be ready
+ 401:349  +func spawnGUIBackground(entry FileEntry, windowID string, fromStdin bool) error        try {
+ 402:350  +	exe, err :            const config = os await window.Executablego.main.App.GetConfig();
+ 403:351  +            if err != nil (config.font_size && config.font_size > 0) {
+ 404:352  +		return fmt                content.Errorf("failed to get executable path: %w", err)style.fontSize = config.font_size + 'px';
+ 405:353  +            }
+ 406:354  +
+ 407:354  +	args := []string{"--internal-gui"}
+ 408:354  +
+ 409:354  +	// Handle content: if from stdin, write to temp file; otherwise use original path
+ 410:354  +	if fromStdin {
+ 411:354  +		tmpFile, err := os.CreateTemp("", "fenestra-*.html")
+ 412:354  +		if err != nil {
+ 413:354  +			return fmt.Errorf("failed to create temp file: %w", err)
+ 414:354  +		}
+ 415:354  +		if _, err := tmpFile.WriteString catch (entry.Content); err != nil) {
+ 416:355  +			tmpFile.Close()
+ 417:355  +			os.Remove(tmpFile.Name())
+ 418:355  +			return fmt            console.Errorferror("failed to write temp file'Error loading config: %w"', err)
+ 419:355  +		}
+ 420:355  +		tmpFile.Close()
+ 421:355  +		args = append(args, "-p", tmpFile.Name(), "--temp-file")
+ 422:355  +	} else {
+ 423:355  +		args = append(args, "-p", entry.Path)
+ 424:355  +	}
+ 425:355  +
+ 426:355  +	// Pass display name if it was explicitly set
+ 427:355  +	if displayName != "" {
+ 428:355  +		args = append(args, "-n", displayName);
+ 429:356  +        }
+ 430:357  +
+ 431:357  +	// Pass window ID if set
+ 432:357  +	if windowID != "" {
+ 433:357  +		args = append(args, "-id", windowID)
+ 434:357  +	}
+ 435:358  +
+ 436:359  +	// Spawn the child process detached Initialize
+ 437:360  +	cmd := exec     document.CommandaddEventListener(exe'DOMContentLoaded', args... async ()
+ 438:360  +	cmd.SysProcAttr = &syscall.SysProcAttr> {
+ 439:361  +		Setsid: true, // Create new session so child survives parent exit
+ 440:361  +	}
+ 441:361  +	// Don't inherit stdin (child reads from file), but keep stderr for errors
+ 442:361  +	cmd.Stderr = os.Stderr
+ 443:361  +
+ 444:361  +	if err := cmd.Start        await loadConfig(); err != nil {
+ 445:361  +		return fmt.Errorf("failed to start GUI process: %w", err)
+ 446:361  +	}
+ 447:361  +
+ 448:362  +	// Wait for socket to be created         await loadContent(guarantees subsequent invocations can connect);
+ 449:363  +	var socketPath string
+ 450:363  +	if windowID != "" {
+ 451:363  +		socketPath = getWindowSocketPath         await loadFiles(windowID);
+ 452:364  +	} else {
+ 453:364  +		socketPath = getSidebarSocketPath();
+ 454:365  +	}diff --git a/go.mod b/go.mod
+ 455:366  +index 2a35775..10d4616 100644
+ 456:367  +	deadline := time--- a/go.Now()mod
+ 456:368  +++ b/go.Add(mod
+ 456:369  @@ -5 * time,6 +5,7 @@ go 1.Second)24.0
+ 457:370  +	for time toolchain go1.Now()24.Before(deadline) {6
+ 458:371  +		if _, err := os.Stat 
+ 458:372   require (socketPath); err == nil {
+ 459:373  +			return nil	github.com/BurntSushi/ Socket exists, child is readytoml v1.6.0
+ 460:374  +		} 	github.com/google/uuid v1.6.0
+ 461:375  +		time 	github.com/spf13/pflag v1.0.Sleep(10 * time
+ 461:376   	github.Millisecond)com/wailsapp/wails/v2 v2.11.0
+ 462:377  +	}diff --git a/go.sum b/go.sum
+ 463:378  +index f4e715a..6822220 100644
+ 464:379  +	return fmt--- a/go.Errorf("timeout waiting for GUI to start")sum
+ 465:380  +}+++ b/go.sum
+ 466:381  +@@ -1,3 +1,5 @@
+ 467:382  ++github.com/BurntSushi/ runGUI runs the Wails application (called from GUI subprocess)toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+ 468:383  +func runGUI(entry FileEntry, windowID string, isWindowIDMode bool) {+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+ 469:384   github.com/bep/ Create app with the file entrydebounce v1.2.1 h1:v67fRdBA9UQu2NhLFXrSg0Brw7CexQekrBwDMM8bzeY=
+ 470:385   	app github.com/bep/debounce v1.2.1/go.mod h1:H8yggRPQKLUhUoqrJC1bO2xNya7vanpDl7xR3ISbCJ0= NewApp(entry, windowID)
+ 471:386   github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

@@ -1,0 +1,11 @@
+# IDE files
+.idea/
+.vscode/
+
+# Built binaries
+/dwdiff
+/cmd/dwdiff/dwdiff
+
+# Test artifacts
+coverage.out
+
