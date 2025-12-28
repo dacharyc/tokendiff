@@ -818,6 +818,78 @@ func TestFindConfigFile(t *testing.T) {
 		}
 	})
 
+	t.Run("finds XDG profile-specific config", func(t *testing.T) {
+		xdgDir := filepath.Join(tmpHome, ".config", "tokendiff")
+		if err := os.MkdirAll(xdgDir, 0755); err != nil {
+			t.Fatalf("failed to create XDG dir: %v", err)
+		}
+		profileConfig := filepath.Join(xdgDir, "config.xdgprofile")
+		if err := os.WriteFile(profileConfig, []byte("# xdg profile config"), 0644); err != nil {
+			t.Fatalf("failed to create XDG profile config: %v", err)
+		}
+		defer os.RemoveAll(filepath.Join(tmpHome, ".config"))
+
+		result, err := findConfigFile("xdgprofile")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result != profileConfig {
+			t.Errorf("expected %q, got %q", profileConfig, result)
+		}
+	})
+
+	t.Run("prefers home profile over XDG profile", func(t *testing.T) {
+		// Create home profile config
+		homeProfile := filepath.Join(tmpHome, ".tokendiffrc.bothprofile")
+		if err := os.WriteFile(homeProfile, []byte("# home profile config"), 0644); err != nil {
+			t.Fatalf("failed to create home profile config: %v", err)
+		}
+		defer os.Remove(homeProfile)
+
+		// Create XDG profile config
+		xdgDir := filepath.Join(tmpHome, ".config", "tokendiff")
+		if err := os.MkdirAll(xdgDir, 0755); err != nil {
+			t.Fatalf("failed to create XDG dir: %v", err)
+		}
+		xdgProfile := filepath.Join(xdgDir, "config.bothprofile")
+		if err := os.WriteFile(xdgProfile, []byte("# xdg profile config"), 0644); err != nil {
+			t.Fatalf("failed to create XDG profile config: %v", err)
+		}
+		defer os.RemoveAll(filepath.Join(tmpHome, ".config"))
+
+		result, err := findConfigFile("bothprofile")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result != homeProfile {
+			t.Errorf("expected home profile %q, got %q", homeProfile, result)
+		}
+	})
+
+	t.Run("respects XDG_CONFIG_HOME for profiles", func(t *testing.T) {
+		customXDG := filepath.Join(tmpHome, "custom-xdg-profile")
+		xdgDir := filepath.Join(customXDG, "tokendiff")
+		if err := os.MkdirAll(xdgDir, 0755); err != nil {
+			t.Fatalf("failed to create custom XDG dir: %v", err)
+		}
+		profileConfig := filepath.Join(xdgDir, "config.customprofile")
+		if err := os.WriteFile(profileConfig, []byte("# custom xdg profile config"), 0644); err != nil {
+			t.Fatalf("failed to create profile config: %v", err)
+		}
+		defer os.RemoveAll(customXDG)
+
+		os.Setenv("XDG_CONFIG_HOME", customXDG)
+		defer os.Unsetenv("XDG_CONFIG_HOME")
+
+		result, err := findConfigFile("customprofile")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result != profileConfig {
+			t.Errorf("expected %q, got %q", profileConfig, result)
+		}
+	})
+
 	t.Run("respects XDG_CONFIG_HOME", func(t *testing.T) {
 		customXDG := filepath.Join(tmpHome, "custom-xdg")
 		xdgDir := filepath.Join(customXDG, "tokendiff")

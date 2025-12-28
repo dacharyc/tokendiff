@@ -110,7 +110,7 @@ func prescanProfile() string {
 
 // defineFlags sets up all command-line flags with config defaults
 func defineFlags(cfg config) cliFlags {
-	_ = flag.String("profile", "", "use settings from ~/.tokendiffrc.<profile>")
+	_ = flag.String("profile", "", "use settings from ~/.tokendiffrc.<profile> or $XDG_CONFIG_HOME/tokendiff/config.<profile>")
 
 	f := cliFlags{
 		delimiters:     flag.StringP("delimiters", "d", cfg.delimiters, "delimiter characters"),
@@ -577,12 +577,23 @@ func findConfigFile(profile string) (string, error) {
 		return "", nil // No default config found, use defaults
 	}
 
-	// Profile explicitly specified - file must exist
+	// Profile explicitly specified - check ~/.tokendiffrc.<profile> first
 	path := filepath.Join(home, ".tokendiffrc."+profile)
-	if _, err := os.Stat(path); err != nil {
-		return "", fmt.Errorf("profile config file not found: %s", path)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
 	}
-	return path, nil
+
+	// Then check XDG_CONFIG_HOME/tokendiff/config.<profile>
+	xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfig == "" {
+		xdgConfig = filepath.Join(home, ".config")
+	}
+	xdgPath := filepath.Join(xdgConfig, "tokendiff", "config."+profile)
+	if _, err := os.Stat(xdgPath); err == nil {
+		return xdgPath, nil
+	}
+
+	return "", fmt.Errorf("profile config file not found: %s or %s", path, xdgPath)
 }
 
 // loadConfig reads a config file and returns the configuration.
