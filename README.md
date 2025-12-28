@@ -1,7 +1,7 @@
 # tokendiff
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/dacharyc/tokendiff.svg)](https://pkg.go.dev/github.com/dacharyc/tokendiff)
-[![CI](https://github.com/dacharyc/tokendiff/actions/workflows/ci.yml/badge.svg)](https://github.com/dacharyc/tokendiff/actions/workflows/ci.yml)
+[![CI](https://github.com/dacharyc/tokendiff/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dacharyc/tokendiff/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/dacharyc/tokendiff)](https://goreportcard.com/report/github.com/dacharyc/tokendiff)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/dacharyc/tokendiff)](https://github.com/dacharyc/tokendiff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
