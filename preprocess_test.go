@@ -22,9 +22,9 @@ func TestDiscardConfusingTokens(t *testing.T) {
 			wantDiscardTokens: nil,
 		},
 		{
-			name:              "no high-frequency tokens - disjoint sets",
-			tokens1:           []string{"a", "b", "c"},
-			tokens2:           []string{"d", "e", "f"},
+			name:    "no high-frequency tokens - disjoint sets",
+			tokens1: []string{"a", "b", "c"},
+			tokens2: []string{"d", "e", "f"},
 			// Per-file counting: no token appears in the other file at all
 			// Tokens with 0 count in other file are kept (they can't match anyway)
 			wantFiltered1Len:  3,

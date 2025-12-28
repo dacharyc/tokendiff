@@ -418,27 +418,5 @@ func ShiftBoundaries(diffs []Diff) []Diff {
 		i++
 	}
 
-	// Merge adjacent same-type operations
-	return mergeAdjacentDiffs(result)
-}
-
-// mergeAdjacentDiffs combines consecutive diffs of the same type.
-func mergeAdjacentDiffs(diffs []Diff) []Diff {
-	if len(diffs) == 0 {
-		return diffs
-	}
-
-	result := make([]Diff, 0, len(diffs))
-
-	for _, d := range diffs {
-		if len(result) > 0 && result[len(result)-1].Type == d.Type {
-			// Same type as previous - this is for tracking, but we keep them separate
-			// since each token is separate in the output
-			result = append(result, d)
-		} else {
-			result = append(result, d)
-		}
-	}
-
 	return result
 }

@@ -3,6 +3,7 @@ package tokendiff
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // TokenPos represents a token's position in the original text.
@@ -62,7 +63,7 @@ func TokenizeWithPositions(text string, opts Options) ([]string, []TokenPos) {
 
 	i := 0
 	for _, r := range text {
-		runeLen := len(string(r))
+		runeLen := utf8.RuneLen(r)
 		switch {
 		case isDelimiter(r):
 			flushWord(i)

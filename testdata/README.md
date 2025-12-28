@@ -1,18 +1,18 @@
 # README
 
 This directory contains 4 files:
-- app_dot_go_v1.go
-- app_dot_go_v2.go
+- app_dot_go_v1.txt
+- app_dot_go_v2.txt
 - expected_output.txt
 - decolored_expected_output.txt
 
-`app_dot_go_v1.go` was created with the following command
+`app_dot_go_v1.txt` was created with the following command
 
-`git show ad46a5c0d9f4b92d24d3a2c07570f65dd21483eb > app_dot_go_v1.go`
+`git show ad46a5c0d9f4b92d24d3a2c07570f65dd21483eb > app_dot_go_v1.txt`
 
-`app_dot_go_v2.go` was created with the following command 
+`app_dot_go_v2.txt` was created with the following command
 
-`git show 97cfec101131551437441f4bce21d04566161c33 > app_dot_go_v2.go`
+`git show 97cfec101131551437441f4bce21d04566161c33 > app_dot_go_v2.txt`
 
 `expected_output.txt` was created by running the following bash code
 

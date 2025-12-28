@@ -826,27 +826,27 @@ func TestFormatDiffResultAdvancedMultiline(t *testing.T) {
 func TestFormatDiffResultAdvancedEdgeCases(t *testing.T) {
 	// Test edge cases
 	tests := []struct {
-		name   string
-		text1  string
-		text2  string
+		name    string
+		text1   string
+		text2   string
 		fmtOpts FormatOptions
 	}{
 		{
-			name:  "empty texts",
-			text1: "",
-			text2: "",
+			name:    "empty texts",
+			text1:   "",
+			text2:   "",
 			fmtOpts: DefaultFormatOptions(),
 		},
 		{
-			name:  "only insertions",
-			text1: "",
-			text2: "new content",
+			name:    "only insertions",
+			text1:   "",
+			text2:   "new content",
 			fmtOpts: DefaultFormatOptions(),
 		},
 		{
-			name:  "only deletions",
-			text1: "old content",
-			text2: "",
+			name:    "only deletions",
+			text1:   "old content",
+			text2:   "",
 			fmtOpts: DefaultFormatOptions(),
 		},
 		{

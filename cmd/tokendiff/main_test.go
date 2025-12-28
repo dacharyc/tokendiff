@@ -533,7 +533,7 @@ match-context=3
 		t.Fatalf("loadConfig error: %v", err)
 	}
 
-	if cfg.delimiters != "()" + "{}" {
+	if cfg.delimiters != "()"+"{}" {
 		t.Errorf("delimiters = %q, want %q", cfg.delimiters, "(){}")
 	}
 	if !cfg.ignoreCase {
