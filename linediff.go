@@ -154,6 +154,9 @@ func DiffLineByLine(text1, text2 string, opts Options, fmtOpts FormatOptions, al
 				i++
 			}
 
+			// Any deletes or inserts mean we have changes
+			anyChanges = true
+
 			// Get pairings based on selected algorithm
 			var pairings []LinePairing
 			switch algorithm {
@@ -181,7 +184,6 @@ func DiffLineByLine(text1, text2 string, opts Options, fmtOpts FormatOptions, al
 					for j := 0; j < insIdx; j++ {
 						if !outputInserts[j] {
 							if _, isPaired := pairedInserts[j]; !isPaired {
-								anyChanges = true
 								outputInserts[j] = true
 
 								insertDiffs := []Diff{{Type: Insert, Token: inserts[j]}}
@@ -208,7 +210,6 @@ func DiffLineByLine(text1, text2 string, opts Options, fmtOpts FormatOptions, al
 					outputInserts[insIdx] = true
 
 					wordResult := DiffStringsWithPositionsAndPreprocessing(oldLine, newLine, opts)
-					anyChanges = true
 
 					lineSt := ComputeStatistics(oldLine, newLine, wordResult.Diffs, opts)
 					totalStats.OldWords += lineSt.OldWords
@@ -229,8 +230,6 @@ func DiffLineByLine(text1, text2 string, opts Options, fmtOpts FormatOptions, al
 					newLineNum++
 				} else {
 					// Unpaired delete
-					anyChanges = true
-
 					deleteDiffs := []Diff{{Type: Delete, Token: deletes[delIdx]}}
 					lineSt := ComputeStatistics(deletes[delIdx], "", deleteDiffs, opts)
 					totalStats.OldWords += lineSt.OldWords
@@ -251,8 +250,6 @@ func DiffLineByLine(text1, text2 string, opts Options, fmtOpts FormatOptions, al
 			// Output any remaining unpaired inserts
 			for j := 0; j < len(inserts); j++ {
 				if !outputInserts[j] {
-					anyChanges = true
-
 					insertDiffs := []Diff{{Type: Insert, Token: inserts[j]}}
 					lineSt := ComputeStatistics("", inserts[j], insertDiffs, opts)
 					totalStats.NewWords += lineSt.NewWords
