@@ -310,6 +310,87 @@ func ComputeTokenSimilarity(text1, text2 string, opts Options) float64 {
 	return float64(equalCount) / float64(totalCount)
 }
 
+// collectTokensOfType collects consecutive tokens of a given type starting at index.
+// Returns the tokens and the new index after the run.
+func collectTokensOfType(diffs []Diff, start int, tokenType Operation) ([]string, int) {
+	i := start
+	for i < len(diffs) && diffs[i].Type == tokenType {
+		i++
+	}
+	tokens := make([]string, 0, i-start)
+	for j := start; j < i; j++ {
+		tokens = append(tokens, diffs[j].Token)
+	}
+	return tokens, i
+}
+
+// findCommonPrefix returns the length of the common prefix between two token slices.
+func findCommonPrefix(a, b []string) int {
+	count := 0
+	for count < len(a) && count < len(b) && a[count] == b[count] {
+		count++
+	}
+	return count
+}
+
+// findCommonSuffix returns the length of the common suffix between two token slices.
+func findCommonSuffix(a, b []string) int {
+	count := 0
+	for count < len(a) && count < len(b) &&
+		a[len(a)-1-count] == b[len(b)-1-count] {
+		count++
+	}
+	return count
+}
+
+// appendTokensAsDiffs appends tokens as Diffs of the given type.
+func appendTokensAsDiffs(result []Diff, tokens []string, tokenType Operation) []Diff {
+	for _, t := range tokens {
+		result = append(result, Diff{Type: tokenType, Token: t})
+	}
+	return result
+}
+
+// processDeleteInsertPair handles a Delete/Insert pair and applies boundary shifting.
+func processDeleteInsertPair(result []Diff, deleteTokens, insertTokens []string) []Diff {
+	// Check backward shift: if previous Equal ends with same token as Delete starts
+	for len(result) > 0 && result[len(result)-1].Type == Equal &&
+		len(deleteTokens) > 0 &&
+		result[len(result)-1].Token == deleteTokens[0] {
+		shiftedToken := deleteTokens[0]
+		deleteTokens = deleteTokens[1:]
+		deleteTokens = append(deleteTokens, shiftedToken)
+		result = result[:len(result)-1]
+	}
+
+	// Check forward shift: common prefix in Delete and Insert
+	commonPrefix := findCommonPrefix(deleteTokens, insertTokens)
+	if commonPrefix > 0 {
+		result = appendTokensAsDiffs(result, deleteTokens[:commonPrefix], Equal)
+		deleteTokens = deleteTokens[commonPrefix:]
+		insertTokens = insertTokens[commonPrefix:]
+	}
+
+	// Check common suffix in Delete and Insert
+	commonSuffix := findCommonSuffix(deleteTokens, insertTokens)
+	var suffixTokens []string
+	if commonSuffix > 0 {
+		suffixTokens = make([]string, commonSuffix)
+		for j := 0; j < commonSuffix; j++ {
+			suffixTokens[j] = deleteTokens[len(deleteTokens)-commonSuffix+j]
+		}
+		deleteTokens = deleteTokens[:len(deleteTokens)-commonSuffix]
+		insertTokens = insertTokens[:len(insertTokens)-commonSuffix]
+	}
+
+	// Output remaining deletes, inserts, and common suffix as Equal
+	result = appendTokensAsDiffs(result, deleteTokens, Delete)
+	result = appendTokensAsDiffs(result, insertTokens, Insert)
+	result = appendTokensAsDiffs(result, suffixTokens, Equal)
+
+	return result
+}
+
 // ShiftBoundaries adjusts diff boundaries to create cleaner output.
 // When a deleted token matches an adjacent equal token, shift the boundary.
 //
@@ -327,93 +408,15 @@ func ShiftBoundaries(diffs []Diff) []Diff {
 
 	i := 0
 	for i < len(diffs) {
-		// Look for Delete followed by Insert
-		if i < len(diffs) && diffs[i].Type == Delete {
-			// Collect consecutive Delete tokens
-			deleteStart := i
-			for i < len(diffs) && diffs[i].Type == Delete {
-				i++
-			}
-			deleteTokens := make([]string, 0, i-deleteStart)
-			for j := deleteStart; j < i; j++ {
-				deleteTokens = append(deleteTokens, diffs[j].Token)
-			}
+		if diffs[i].Type == Delete {
+			deleteTokens, nextIdx := collectTokensOfType(diffs, i, Delete)
+			insertTokens, nextIdx := collectTokensOfType(diffs, nextIdx, Insert)
+			i = nextIdx
 
-			// Collect consecutive Insert tokens
-			insertStart := i
-			for i < len(diffs) && diffs[i].Type == Insert {
-				i++
-			}
-			insertTokens := make([]string, 0, i-insertStart)
-			for j := insertStart; j < i; j++ {
-				insertTokens = append(insertTokens, diffs[j].Token)
-			}
-
-			// Check backward shift: if previous Equal ends with same token as Delete starts
-			// EQUAL[...x] DELETE[x...] → EQUAL[...] DELETE[...] (x moves to delete end)
-			for len(result) > 0 && result[len(result)-1].Type == Equal &&
-				len(deleteTokens) > 0 &&
-				result[len(result)-1].Token == deleteTokens[0] {
-				// Move x from delete start to delete end (effectively a backward shift)
-				shiftedToken := deleteTokens[0]
-				deleteTokens = deleteTokens[1:]
-				deleteTokens = append(deleteTokens, shiftedToken)
-				// Remove x from Equal
-				result = result[:len(result)-1]
-			}
-
-			// Check forward shift: common prefix in Delete and Insert
-			// DELETE[x...] INSERT[x...] → shift x to following Equal
-			commonPrefix := 0
-			for commonPrefix < len(deleteTokens) && commonPrefix < len(insertTokens) &&
-				deleteTokens[commonPrefix] == insertTokens[commonPrefix] {
-				commonPrefix++
-			}
-
-			if commonPrefix > 0 {
-				// The common tokens become Equal instead of Delete+Insert
-				for j := 0; j < commonPrefix; j++ {
-					result = append(result, Diff{Type: Equal, Token: deleteTokens[j]})
-				}
-				deleteTokens = deleteTokens[commonPrefix:]
-				insertTokens = insertTokens[commonPrefix:]
-			}
-
-			// Check common suffix in Delete and Insert
-			commonSuffix := 0
-			for commonSuffix < len(deleteTokens) && commonSuffix < len(insertTokens) &&
-				deleteTokens[len(deleteTokens)-1-commonSuffix] == insertTokens[len(insertTokens)-1-commonSuffix] {
-				commonSuffix++
-			}
-
-			suffixTokens := make([]string, commonSuffix)
-			if commonSuffix > 0 {
-				for j := 0; j < commonSuffix; j++ {
-					suffixTokens[j] = deleteTokens[len(deleteTokens)-commonSuffix+j]
-				}
-				deleteTokens = deleteTokens[:len(deleteTokens)-commonSuffix]
-				insertTokens = insertTokens[:len(insertTokens)-commonSuffix]
-			}
-
-			// Output remaining deletes
-			for _, t := range deleteTokens {
-				result = append(result, Diff{Type: Delete, Token: t})
-			}
-
-			// Output remaining inserts
-			for _, t := range insertTokens {
-				result = append(result, Diff{Type: Insert, Token: t})
-			}
-
-			// Output common suffix as Equal
-			for _, t := range suffixTokens {
-				result = append(result, Diff{Type: Equal, Token: t})
-			}
-
+			result = processDeleteInsertPair(result, deleteTokens, insertTokens)
 			continue
 		}
 
-		// Non-Delete token: pass through
 		result = append(result, diffs[i])
 		i++
 	}

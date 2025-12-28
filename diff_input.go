@@ -7,92 +7,101 @@ import (
 	"strings"
 )
 
+// isGitExtendedHeader returns true if the line is a git extended header.
+func isGitExtendedHeader(line string) bool {
+	prefixes := []string{"diff ", "index ", "new file", "deleted file", "similarity", "rename", "Binary"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDiffHeader returns true if the line is a file header.
+func isDiffHeader(line string) bool {
+	return strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++")
+}
+
+// isHunkHeader returns true if the line is a hunk header.
+func isHunkHeader(line string) bool {
+	return strings.HasPrefix(line, "@@")
+}
+
+// diffProcessor handles processing unified diff input.
+type diffProcessor struct {
+	output   io.Writer
+	opts     Options
+	fmtOpts  FormatOptions
+	oldLines []string
+	newLines []string
+	inHunk   bool
+}
+
+// flushHunk outputs accumulated changes as word-level diff.
+func (p *diffProcessor) flushHunk() {
+	if len(p.oldLines) == 0 && len(p.newLines) == 0 {
+		return
+	}
+
+	oldText := strings.Join(p.oldLines, "\n")
+	newText := strings.Join(p.newLines, "\n")
+
+	result := DiffWholeFiles(oldText, newText, p.opts, p.fmtOpts)
+	fmt.Fprintln(p.output, result.Formatted)
+
+	p.oldLines = nil
+	p.newLines = nil
+}
+
+// processHunkLine handles a line inside a hunk.
+func (p *diffProcessor) processHunkLine(line string) {
+	switch {
+	case strings.HasPrefix(line, "-"):
+		p.oldLines = append(p.oldLines, line[1:])
+	case strings.HasPrefix(line, "+"):
+		p.newLines = append(p.newLines, line[1:])
+	case strings.HasPrefix(line, " "):
+		p.flushHunk()
+		fmt.Fprintln(p.output, line[1:])
+	case line == "":
+		p.flushHunk()
+		fmt.Fprintln(p.output, line)
+	default:
+		p.flushHunk()
+		fmt.Fprintln(p.output, line)
+	}
+}
+
+// processLine handles a single line of diff input.
+func (p *diffProcessor) processLine(line string) {
+	switch {
+	case isDiffHeader(line), isGitExtendedHeader(line):
+		p.flushHunk()
+		p.inHunk = false
+		fmt.Fprintln(p.output, line)
+	case isHunkHeader(line):
+		p.flushHunk()
+		p.inHunk = true
+		fmt.Fprintln(p.output, line)
+	case p.inHunk:
+		p.processHunkLine(line)
+	default:
+		fmt.Fprintln(p.output, line)
+	}
+}
+
 // ProcessUnifiedDiff reads a unified diff from input and applies word-level
 // diffing to each hunk. The result is written to output with diff headers
 // preserved and hunk content replaced with word-level diff output.
-//
-// This is useful for enhancing the output of tools like "git diff" to show
-// exactly which words changed within each line, rather than showing entire
-// lines as changed.
 func ProcessUnifiedDiff(input io.Reader, output io.Writer, opts Options, fmtOpts FormatOptions) error {
 	scanner := bufio.NewScanner(input)
-	var oldLines, newLines []string
-	inHunk := false
-
-	flushHunk := func() {
-		if len(oldLines) == 0 && len(newLines) == 0 {
-			return
-		}
-
-		oldText := strings.Join(oldLines, "\n")
-		newText := strings.Join(newLines, "\n")
-
-		result := DiffWholeFiles(oldText, newText, opts, fmtOpts)
-		fmt.Fprintln(output, result.Formatted)
-
-		oldLines = nil
-		newLines = nil
-	}
+	p := &diffProcessor{output: output, opts: opts, fmtOpts: fmtOpts}
 
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		// File headers
-		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
-			flushHunk()
-			inHunk = false
-			fmt.Fprintln(output, line)
-			continue
-		}
-
-		// Hunk header
-		if strings.HasPrefix(line, "@@") {
-			flushHunk()
-			inHunk = true
-			fmt.Fprintln(output, line)
-			continue
-		}
-
-		// Git extended headers
-		if strings.HasPrefix(line, "diff ") ||
-			strings.HasPrefix(line, "index ") ||
-			strings.HasPrefix(line, "new file") ||
-			strings.HasPrefix(line, "deleted file") ||
-			strings.HasPrefix(line, "similarity") ||
-			strings.HasPrefix(line, "rename") ||
-			strings.HasPrefix(line, "Binary") {
-			flushHunk()
-			inHunk = false
-			fmt.Fprintln(output, line)
-			continue
-		}
-
-		if !inHunk {
-			fmt.Fprintln(output, line)
-			continue
-		}
-
-		// Inside a hunk: collect old/new lines
-		if strings.HasPrefix(line, "-") {
-			oldLines = append(oldLines, line[1:])
-		} else if strings.HasPrefix(line, "+") {
-			newLines = append(newLines, line[1:])
-		} else if strings.HasPrefix(line, " ") || line == "" {
-			// Context line or empty line - flush accumulated changes first
-			flushHunk()
-			if strings.HasPrefix(line, " ") {
-				fmt.Fprintln(output, line[1:])
-			} else {
-				fmt.Fprintln(output, line)
-			}
-		} else {
-			// Unknown line format - pass through
-			flushHunk()
-			fmt.Fprintln(output, line)
-		}
+		p.processLine(scanner.Text())
 	}
 
-	flushHunk()
-
+	p.flushHunk()
 	return scanner.Err()
 }

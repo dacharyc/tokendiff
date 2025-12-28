@@ -386,6 +386,369 @@ func FormatDiffWithOptions(diffs []Diff, opts FormatOptions) string {
 	return sb.String()
 }
 
+// formatDeleteToken formats a Delete token with appropriate markers/colors.
+func formatDeleteToken(token string, opts FormatOptions) string {
+	if opts.NoDeleted || token == "\n" {
+		if opts.NoDeleted {
+			return ""
+		}
+		return "\n"
+	}
+	if opts.LessMode || opts.PrinterMode {
+		return OverstrikeUnderline(token)
+	}
+	if opts.ShowLineNumbers && opts.UseColor {
+		return token
+	}
+	if opts.UseColor {
+		if opts.RepeatMarkers && strings.Contains(token, "\n") {
+			token = strings.ReplaceAll(token, "\n", opts.ColorReset+"\n"+opts.DeleteColor)
+		}
+		return opts.DeleteColor + token + opts.ColorReset
+	}
+	if opts.RepeatMarkers && strings.Contains(token, "\n") {
+		token = strings.ReplaceAll(token, "\n", opts.StopDelete+"\n"+opts.StartDelete)
+	}
+	return opts.StartDelete + token + opts.StopDelete
+}
+
+// formatInsertToken formats an Insert token with appropriate markers/colors.
+func formatInsertToken(token string, opts FormatOptions) string {
+	if opts.NoInserted || token == "\n" {
+		if opts.NoInserted {
+			return ""
+		}
+		return "\n"
+	}
+	if opts.LessMode || opts.PrinterMode {
+		return OverstrikeBold(token)
+	}
+	if opts.ShowLineNumbers && opts.UseColor {
+		return token
+	}
+	if opts.UseColor {
+		if opts.RepeatMarkers && strings.Contains(token, "\n") {
+			token = strings.ReplaceAll(token, "\n", opts.ClearToEOL+opts.ColorReset+"\n"+opts.InsertColor)
+		}
+		return opts.InsertColor + token + opts.ColorReset
+	}
+	if opts.RepeatMarkers && strings.Contains(token, "\n") {
+		token = strings.ReplaceAll(token, "\n", opts.StopInsert+"\n"+opts.StartInsert)
+	}
+	return opts.StartInsert + token + opts.StopInsert
+}
+
+// formatNonEqualToken formats a non-Equal token with markers and colors.
+func formatNonEqualToken(d Diff, opts FormatOptions) string {
+	switch d.Type {
+	case Delete:
+		return formatDeleteToken(d.Token, opts)
+	case Insert:
+		return formatInsertToken(d.Token, opts)
+	}
+	return ""
+}
+
+// diffFormatter holds state for formatting a DiffResult with line numbers and colors.
+type diffFormatter struct {
+	opts               FormatOptions
+	result             DiffResult
+	lines              []string
+	currentLine        strings.Builder
+	colorState         Operation
+	prevLineEndedColor bool
+	oldLine            int
+	newLine            int
+	lastText2Pos       int
+	idx1               int
+	idx2               int
+}
+
+// newDiffFormatter creates a new formatter for the given result and options.
+func newDiffFormatter(result DiffResult, opts FormatOptions) *diffFormatter {
+	return &diffFormatter{
+		opts:       opts,
+		result:     result,
+		colorState: -1,
+		oldLine:    1,
+		newLine:    1,
+	}
+}
+
+// linePrefix returns the line number prefix for the current position.
+func (f *diffFormatter) linePrefix() string {
+	if !f.opts.ShowLineNumbers {
+		return ""
+	}
+	oldWidth := f.opts.LineNumWidth + 1
+	newWidth := f.opts.LineNumWidth + 2
+	return fmt.Sprintf("%*d:%-*d", oldWidth, f.oldLine, newWidth, f.newLine)
+}
+
+// writeContent writes content with line number tracking and color state management.
+func (f *diffFormatter) writeContent(content string, diffType Operation) {
+	if f.opts.ShowLineNumbers && f.opts.UseColor {
+		if diffType == Equal && f.colorState != -1 {
+			f.currentLine.WriteString(f.opts.ColorReset)
+			f.colorState = -1
+		} else if diffType != Equal && f.colorState != diffType {
+			if f.colorState != -1 {
+				f.currentLine.WriteString(f.opts.ColorReset)
+			}
+			f.colorState = diffType
+			if diffType == Delete {
+				f.currentLine.WriteString(f.opts.DeleteColor)
+			} else {
+				f.currentLine.WriteString(f.opts.InsertColor)
+			}
+		}
+	}
+
+	for _, r := range content {
+		if r == '\n' {
+			f.flushLine(diffType)
+		} else {
+			f.currentLine.WriteRune(r)
+		}
+	}
+}
+
+// flushLine finishes the current line and advances line numbers.
+func (f *diffFormatter) flushLine(diffType Operation) {
+	thisLineEndedColored := false
+	if f.opts.ShowLineNumbers && f.opts.UseColor && f.colorState != -1 {
+		f.currentLine.WriteString(f.opts.ClearToEOL)
+		thisLineEndedColored = true
+	}
+
+	prefix := f.linePrefix()
+	if f.prevLineEndedColor {
+		prefix = f.opts.ColorReset + prefix
+	}
+	f.lines = append(f.lines, prefix+f.currentLine.String())
+	f.currentLine.Reset()
+
+	f.prevLineEndedColor = thisLineEndedColored
+
+	if f.colorState != -1 {
+		if f.colorState == Delete {
+			f.currentLine.WriteString(f.opts.DeleteColor)
+		} else {
+			f.currentLine.WriteString(f.opts.InsertColor)
+		}
+	}
+
+	switch diffType {
+	case Equal:
+		f.oldLine++
+		f.newLine++
+	case Delete:
+		f.oldLine++
+	case Insert:
+		f.newLine++
+	}
+}
+
+// skipCommonNewlines handles NoCommon mode by counting newlines without output.
+func (f *diffFormatter) skipCommonNewlines(diffs []Diff, runStart, runEnd int) {
+	for j := runStart; j < runEnd; j++ {
+		for _, r := range diffs[j].Token {
+			if r == '\n' {
+				if f.opts.ShowLineNumbers {
+					f.lines = append(f.lines, f.linePrefix()+f.currentLine.String())
+					f.currentLine.Reset()
+				}
+				f.oldLine++
+				f.newLine++
+			}
+		}
+	}
+}
+
+// writeEqualFromPositions writes Equal content using position information.
+func (f *diffFormatter) writeEqualFromPositions(runTokenCount int) {
+	startPos := f.result.Positions2[f.idx2].Start
+	if f.idx2 == 0 && f.currentLine.Len() == 0 && startPos > 0 {
+		startPos = 0
+	}
+	endPos := f.result.Positions2[f.idx2+runTokenCount-1].End
+
+	if f.lastText2Pos > 0 && startPos > f.lastText2Pos {
+		gap := f.result.Text2[f.lastText2Pos:startPos]
+		f.writeContent(gap, Equal)
+	}
+
+	f.writeContent(f.result.Text2[startPos:endPos], Equal)
+	f.lastText2Pos = endPos
+}
+
+// writeEqualTokensFallback writes Equal tokens with heuristic spacing.
+func (f *diffFormatter) writeEqualTokensFallback(diffs []Diff, runStart, runEnd int) {
+	for j := runStart; j < runEnd; j++ {
+		if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
+			f.writeContent(" ", Equal)
+		} else if j == runStart && f.currentLine.Len() > 0 && runStart > 0 {
+			prev := diffs[runStart-1]
+			if NeedsSpaceAfter(prev.Token) && NeedsSpaceBefore(diffs[j].Token) {
+				f.writeContent(" ", Equal)
+			}
+		}
+		f.writeContent(diffs[j].Token, Equal)
+	}
+}
+
+// processEqualRun handles a run of consecutive Equal diffs.
+func (f *diffFormatter) processEqualRun(diffs []Diff, runStart, runEnd int) {
+	if f.opts.NoCommon {
+		f.skipCommonNewlines(diffs, runStart, runEnd)
+		return
+	}
+
+	runTokenCount := runEnd - runStart
+	hasPositions := f.idx2 < len(f.result.Positions2) && f.idx2+runTokenCount-1 < len(f.result.Positions2)
+
+	if hasPositions {
+		f.writeEqualFromPositions(runTokenCount)
+	} else {
+		f.writeEqualTokensFallback(diffs, runStart, runEnd)
+	}
+}
+
+// processDeleteRun handles a run of consecutive Delete diffs.
+func (f *diffFormatter) processDeleteRun(diffs []Diff, runStart, runEnd int) {
+	if f.currentLine.Len() > 0 && runStart > 0 {
+		prev := diffs[runStart-1]
+		adjacentChange := prev.Type == Insert
+		if !adjacentChange {
+			needSpace := false
+			if f.idx1 < len(f.result.Positions1) && f.idx1 > 0 {
+				prevEnd := f.result.Positions1[f.idx1-1].End
+				currStart := f.result.Positions1[f.idx1].Start
+				if currStart > prevEnd {
+					gap := f.result.Text1[prevEnd:currStart]
+					needSpace = strings.ContainsAny(gap, " \t\n\r")
+				}
+			} else {
+				needSpace = NeedsSpaceAfter(prev.Token) && NeedsSpaceBefore(diffs[runStart].Token)
+			}
+			if needSpace {
+				f.writeContent(" ", Equal)
+			}
+		}
+	}
+
+	// Extract original text from text1
+	runLen := runEnd - runStart
+	if f.idx1 < len(f.result.Positions1) && f.idx1+runLen-1 < len(f.result.Positions1) {
+		startPos := f.result.Positions1[f.idx1].Start
+		endPos := f.result.Positions1[f.idx1+runLen-1].End
+		original := f.result.Text1[startPos:endPos]
+		formatted := formatNonEqualToken(Diff{Type: Delete, Token: original}, f.opts)
+		f.writeContent(formatted, Delete)
+	} else {
+		for j := runStart; j < runEnd; j++ {
+			if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
+				f.writeContent(" ", Delete)
+			}
+			formatted := formatNonEqualToken(diffs[j], f.opts)
+			f.writeContent(formatted, Delete)
+		}
+	}
+}
+
+// processInsertGap handles the gap before an Insert run.
+func (f *diffFormatter) processInsertGap() {
+	if f.idx2 >= len(f.result.Positions2) {
+		return
+	}
+	insStart := f.result.Positions2[f.idx2].Start
+	if f.lastText2Pos <= 0 || insStart <= f.lastText2Pos {
+		return
+	}
+
+	gap := f.result.Text2[f.lastText2Pos:insStart]
+	for _, r := range gap {
+		if r == '\n' {
+			if f.opts.ShowLineNumbers {
+				thisLineEndedColored := false
+				if f.opts.UseColor && f.colorState != -1 {
+					f.currentLine.WriteString(f.opts.ClearToEOL)
+					thisLineEndedColored = true
+				}
+				prefix := f.linePrefix()
+				if f.prevLineEndedColor {
+					prefix = f.opts.ColorReset + prefix
+				}
+				f.lines = append(f.lines, prefix+f.currentLine.String())
+				f.currentLine.Reset()
+				f.prevLineEndedColor = thisLineEndedColored
+				if f.colorState != -1 {
+					if f.colorState == Delete {
+						f.currentLine.WriteString(f.opts.DeleteColor)
+					} else {
+						f.currentLine.WriteString(f.opts.InsertColor)
+					}
+				}
+			} else {
+				f.currentLine.WriteRune('\n')
+			}
+			f.newLine++
+		} else {
+			if f.opts.ShowLineNumbers && f.opts.UseColor && f.colorState != -1 {
+				f.currentLine.WriteString(f.opts.ColorReset)
+				f.colorState = -1
+			}
+			f.currentLine.WriteRune(r)
+		}
+	}
+}
+
+// processInsertRun handles a run of consecutive Insert diffs.
+func (f *diffFormatter) processInsertRun(diffs []Diff, runStart, runEnd int) {
+	f.processInsertGap()
+
+	// Extract original text from text2
+	runLen := runEnd - runStart
+	if f.idx2 < len(f.result.Positions2) && f.idx2+runLen-1 < len(f.result.Positions2) {
+		startPos := f.result.Positions2[f.idx2].Start
+		endPos := f.result.Positions2[f.idx2+runLen-1].End
+		original := f.result.Text2[startPos:endPos]
+		formatted := formatNonEqualToken(Diff{Type: Insert, Token: original}, f.opts)
+		f.writeContent(formatted, Insert)
+		f.lastText2Pos = endPos
+	} else {
+		for j := runStart; j < runEnd; j++ {
+			if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
+				f.writeContent(" ", Insert)
+			}
+			formatted := formatNonEqualToken(diffs[j], f.opts)
+			f.writeContent(formatted, Insert)
+		}
+	}
+}
+
+// finalize completes the formatting and returns the result string.
+func (f *diffFormatter) finalize() string {
+	// Reset color at end if still active
+	if f.opts.UseColor && f.colorState != -1 {
+		f.currentLine.WriteString(f.opts.ColorReset)
+	}
+
+	// Output final line
+	if f.opts.ShowLineNumbers {
+		if f.currentLine.Len() > 0 || len(f.lines) == 0 {
+			f.lines = append(f.lines, f.linePrefix()+f.currentLine.String())
+		}
+		return strings.Join(f.lines, "\n")
+	}
+
+	if len(f.lines) > 0 {
+		f.lines = append(f.lines, f.currentLine.String())
+		return strings.Join(f.lines, "\n")
+	}
+	return f.currentLine.String()
+}
+
 // OverstrikeUnderline returns text with overstrike underlining (_\bchar for each char).
 // This is used for less -r mode to highlight deleted text.
 func OverstrikeUnderline(text string) string {
@@ -410,125 +773,55 @@ func OverstrikeBold(text string) string {
 	return sb.String()
 }
 
-// FormatDiffsAdvanced formats diffs with comprehensive options including colors,
-// line numbers, overstrike modes, and marker repetition.
-// This is a more feature-rich alternative to FormatDiffWithOptions.
-func FormatDiffsAdvanced(diffs []Diff, opts FormatOptions) string {
-	// Set defaults for color reset/clear if not provided
-	if opts.ColorReset == "" {
-		opts.ColorReset = ANSIReset
-	}
-	if opts.ClearToEOL == "" {
-		opts.ClearToEOL = ANSIClearEOL
-	}
-
-	// Apply match context first (before aggregation)
-	if opts.MatchContext > 0 {
-		diffs = ApplyMatchContext(diffs, opts.MatchContext)
-	}
-
-	// Apply aggregation if requested
-	if opts.AggregateChanges {
-		diffs = AggregateDiffs(diffs)
-	}
-
-	// Helper to format a single token with markers and colors
-	formatToken := func(d Diff) string {
-		switch d.Type {
-		case Equal:
-			if opts.NoCommon {
-				return ""
-			}
-			return d.Token
-		case Delete:
-			if opts.NoDeleted {
-				return ""
-			}
-			token := d.Token
-			// Pure newline tokens don't get markers - they just affect line tracking
-			if token == "\n" {
-				return "\n"
-			}
-			// Overstrike modes: underline deleted text, no markers
-			if opts.LessMode || opts.PrinterMode {
-				return OverstrikeUnderline(token)
-			}
-			// With colors: no text markers (like original dwdiff)
-			if opts.UseColor {
-				// Handle repeat markers for multi-line changes
-				if opts.RepeatMarkers && strings.Contains(token, "\n") {
-					token = strings.ReplaceAll(token, "\n",
-						opts.ColorReset+"\n"+opts.DeleteColor)
-				}
-				return opts.DeleteColor + token + opts.ColorReset
-			}
-			// Without colors: use text markers
-			if opts.RepeatMarkers && strings.Contains(token, "\n") {
-				token = strings.ReplaceAll(token, "\n",
-					opts.StopDelete+"\n"+opts.StartDelete)
-			}
-			return opts.StartDelete + token + opts.StopDelete
-		case Insert:
-			if opts.NoInserted {
-				return ""
-			}
-			token := d.Token
-			// Pure newline tokens don't get markers - they just affect line tracking
-			if token == "\n" {
-				return "\n"
-			}
-			// Overstrike modes: bold inserted text, no markers
-			if opts.LessMode || opts.PrinterMode {
-				return OverstrikeBold(token)
-			}
-			// With colors: no text markers (like original dwdiff)
-			if opts.UseColor {
-				// Handle repeat markers for multi-line changes
-				if opts.RepeatMarkers && strings.Contains(token, "\n") {
-					token = strings.ReplaceAll(token, "\n",
-						opts.ColorReset+"\n"+opts.InsertColor)
-				}
-				return opts.InsertColor + token + opts.ColorReset
-			}
-			// Without colors: use text markers
-			if opts.RepeatMarkers && strings.Contains(token, "\n") {
-				token = strings.ReplaceAll(token, "\n",
-					opts.StopInsert+"\n"+opts.StartInsert)
-			}
-			return opts.StartInsert + token + opts.StopInsert
+// formatToken formats a single diff token with markers and colors.
+func formatToken(d Diff, opts FormatOptions) string {
+	switch d.Type {
+	case Equal:
+		if opts.NoCommon {
+			return ""
 		}
-		return ""
+		return d.Token
+	case Delete, Insert:
+		return formatNonEqualToken(d, opts)
 	}
+	return ""
+}
 
-	// Simple path: no line numbers
-	if !opts.ShowLineNumbers {
-		var sb strings.Builder
-		var prevToken string
-		var prevType Operation = -1
-		for _, d := range diffs {
-			if opts.HeuristicSpacing && prevToken != "" {
-				needSpace := false
-				if prevType == d.Type {
-					// Same type: only add space for Delete/Insert (not Equal)
-					if d.Type != Equal {
-						needSpace = NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
-					}
-				} else {
-					// Type transition: add space if both tokens support it
-					needSpace = NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
-				}
-				if needSpace {
-					sb.WriteString(" ")
-				}
-			}
-			sb.WriteString(formatToken(d))
-			prevToken = d.Token
-			prevType = d.Type
+// needsHeuristicSpace determines if a space should be inserted between tokens.
+func needsHeuristicSpace(prevToken string, prevType Operation, d Diff) bool {
+	if prevToken == "" {
+		return false
+	}
+	if prevType == d.Type {
+		// Same type: only add space for Delete/Insert (not Equal)
+		if d.Type != Equal {
+			return NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
 		}
-		return sb.String()
+		return false
 	}
+	// Type transition: add space if both tokens support it
+	return NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
+}
 
-	// Line numbers path: track old/new line positions
+// formatDiffsSimple formats diffs without line numbers.
+func formatDiffsSimple(diffs []Diff, opts FormatOptions) string {
+	var sb strings.Builder
+	var prevToken string
+	var prevType Operation = -1
+
+	for _, d := range diffs {
+		if opts.HeuristicSpacing && needsHeuristicSpace(prevToken, prevType, d) {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(formatToken(d, opts))
+		prevToken = d.Token
+		prevType = d.Type
+	}
+	return sb.String()
+}
+
+// formatDiffsWithLineNumbers formats diffs with line number tracking.
+func formatDiffsWithLineNumbers(diffs []Diff, opts FormatOptions) string {
 	var lines []string
 	var currentLine strings.Builder
 	oldLine := 1
@@ -536,8 +829,6 @@ func FormatDiffsAdvanced(diffs []Diff, opts FormatOptions) string {
 	width := opts.LineNumWidth
 
 	linePrefix := func() string {
-		// Old line: width + 1 (right-aligned with one leading space for largest number)
-		// New line: width + 2 (left-aligned with trailing space plus breathing room)
 		oldWidth := width + 1
 		newWidth := width + 2
 		return fmt.Sprintf("%*d:%-*d", oldWidth, oldLine, newWidth, newLine)
@@ -547,23 +838,12 @@ func FormatDiffsAdvanced(diffs []Diff, opts FormatOptions) string {
 
 	var prevToken string
 	var prevType Operation = -1
+
 	for _, d := range diffs {
-		if opts.HeuristicSpacing && prevToken != "" {
-			needSpace := false
-			if prevType == d.Type {
-				// Same type: only add space for Delete/Insert (not Equal)
-				if d.Type != Equal {
-					needSpace = NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
-				}
-			} else {
-				// Type transition: add space if both tokens support it
-				needSpace = NeedsSpaceAfter(prevToken) && NeedsSpaceBefore(d.Token)
-			}
-			if needSpace {
-				currentLine.WriteString(" ")
-			}
+		if opts.HeuristicSpacing && needsHeuristicSpace(prevToken, prevType, d) {
+			currentLine.WriteString(" ")
 		}
-		formatted := formatToken(d)
+		formatted := formatToken(d, opts)
 
 		// Handle newlines within the formatted token
 		if strings.Contains(formatted, "\n") {
@@ -601,6 +881,34 @@ func FormatDiffsAdvanced(diffs []Diff, opts FormatOptions) string {
 	return strings.Join(lines, "\n")
 }
 
+// FormatDiffsAdvanced formats diffs with comprehensive options including colors,
+// line numbers, overstrike modes, and marker repetition.
+// This is a more feature-rich alternative to FormatDiffWithOptions.
+func FormatDiffsAdvanced(diffs []Diff, opts FormatOptions) string {
+	// Set defaults for color reset/clear if not provided
+	if opts.ColorReset == "" {
+		opts.ColorReset = ANSIReset
+	}
+	if opts.ClearToEOL == "" {
+		opts.ClearToEOL = ANSIClearEOL
+	}
+
+	// Apply match context first (before aggregation)
+	if opts.MatchContext > 0 {
+		diffs = ApplyMatchContext(diffs, opts.MatchContext)
+	}
+
+	// Apply aggregation if requested
+	if opts.AggregateChanges {
+		diffs = AggregateDiffs(diffs)
+	}
+
+	if opts.ShowLineNumbers {
+		return formatDiffsWithLineNumbers(diffs, opts)
+	}
+	return formatDiffsSimple(diffs, opts)
+}
+
 // FormatDiffResultAdvanced formats a DiffResult preserving original spacing for Equal content.
 // This uses position information to extract original text for Equal runs instead of
 // reconstructing from tokens, which loses whitespace information.
@@ -628,225 +936,23 @@ func FormatDiffResultAdvanced(result DiffResult, opts FormatOptions) string {
 		diffs = ApplyMatchContext(diffs, opts.MatchContext)
 	}
 
-	// Track current position in each token list
-	var idx1, idx2 int
+	// Create formatter and process diffs
+	f := newDiffFormatter(result, opts)
 
-	// Track the last position in text2 that we've output
-	lastText2Pos := 0
-
-	// Line number tracking
-	oldLine := 1
-	newLine := 1
-	width := opts.LineNumWidth
-
-	// Helper to generate line number prefix
-	linePrefix := func() string {
-		if !opts.ShowLineNumbers {
-			return ""
-		}
-		oldWidth := width + 1
-		newWidth := width + 2
-		return fmt.Sprintf("%*d:%-*d", oldWidth, oldLine, newWidth, newLine)
-	}
-
-	// Helper to format non-Equal tokens with markers and colors
-	// When UseColor is true, we use colors only (no text markers) - matching dwdiff behavior
-	// When ShowLineNumbers && UseColor, writeContent handles colors, so return plain token
-	formatNonEqualToken := func(d Diff) string {
-		switch d.Type {
-		case Delete:
-			if opts.NoDeleted {
-				return ""
-			}
-			token := d.Token
-			if token == "\n" {
-				return "\n"
-			}
-			if opts.LessMode || opts.PrinterMode {
-				return OverstrikeUnderline(token)
-			}
-			// When using colors with line numbers, writeContent handles the coloring
-			// so just return the plain token
-			if opts.ShowLineNumbers && opts.UseColor {
-				return token
-			}
-			// When using colors without line numbers, add color codes directly
-			if opts.UseColor {
-				if opts.RepeatMarkers && strings.Contains(token, "\n") {
-					token = strings.ReplaceAll(token, "\n",
-						opts.ColorReset+"\n"+opts.DeleteColor)
-				}
-				return opts.DeleteColor + token + opts.ColorReset
-			}
-			// No colors - use text markers
-			if opts.RepeatMarkers && strings.Contains(token, "\n") {
-				token = strings.ReplaceAll(token, "\n",
-					opts.StopDelete+"\n"+opts.StartDelete)
-			}
-			return opts.StartDelete + token + opts.StopDelete
-		case Insert:
-			if opts.NoInserted {
-				return ""
-			}
-			token := d.Token
-			if token == "\n" {
-				return "\n"
-			}
-			if opts.LessMode || opts.PrinterMode {
-				return OverstrikeBold(token)
-			}
-			// When using colors with line numbers, writeContent handles the coloring
-			// so just return the plain token
-			if opts.ShowLineNumbers && opts.UseColor {
-				return token
-			}
-			// When using colors without line numbers, add color codes directly
-			if opts.UseColor {
-				if opts.RepeatMarkers && strings.Contains(token, "\n") {
-					token = strings.ReplaceAll(token, "\n",
-						opts.ClearToEOL+opts.ColorReset+"\n"+opts.InsertColor)
-				}
-				return opts.InsertColor + token + opts.ColorReset
-			}
-			// No colors - use text markers
-			if opts.RepeatMarkers && strings.Contains(token, "\n") {
-				token = strings.ReplaceAll(token, "\n",
-					opts.StopInsert+"\n"+opts.StartInsert)
-			}
-			return opts.StartInsert + token + opts.StopInsert
-		}
-		return ""
-	}
-
-	// Helper to write content with line number tracking
-	var lines []string
-	var currentLine strings.Builder
-	var colorState Operation = -1
-	var prevLineEndedColored bool
-
-	writeContent := func(content string, diffType Operation) {
-		if opts.ShowLineNumbers && opts.UseColor {
-			if diffType == Equal && colorState != -1 {
-				currentLine.WriteString(opts.ColorReset)
-				colorState = -1
-			} else if diffType != Equal && colorState != diffType {
-				if colorState != -1 {
-					currentLine.WriteString(opts.ColorReset)
-				}
-				colorState = diffType
-				if diffType == Delete {
-					currentLine.WriteString(opts.DeleteColor)
-				} else {
-					currentLine.WriteString(opts.InsertColor)
-				}
-			}
-		}
-
-		for _, r := range content {
-			if r == '\n' {
-				thisLineEndedColored := false
-				if opts.ShowLineNumbers && opts.UseColor && colorState != -1 {
-					currentLine.WriteString(opts.ClearToEOL)
-					thisLineEndedColored = true
-				}
-
-				prefix := linePrefix()
-				if prevLineEndedColored {
-					prefix = opts.ColorReset + prefix
-				}
-				lines = append(lines, prefix+currentLine.String())
-				currentLine.Reset()
-
-				prevLineEndedColored = thisLineEndedColored
-
-				if colorState != -1 {
-					if colorState == Delete {
-						currentLine.WriteString(opts.DeleteColor)
-					} else {
-						currentLine.WriteString(opts.InsertColor)
-					}
-				}
-
-				switch diffType {
-				case Equal:
-					oldLine++
-					newLine++
-				case Delete:
-					oldLine++
-				case Insert:
-					newLine++
-				}
-			} else {
-				currentLine.WriteRune(r)
-			}
-		}
-	}
-
-	// Process diffs
 	i := 0
 	for i < len(diffs) {
 		d := diffs[i]
 
 		switch d.Type {
 		case Equal:
-			if opts.NoCommon {
-				for _, r := range d.Token {
-					if r == '\n' {
-						if opts.ShowLineNumbers {
-							lines = append(lines, linePrefix()+currentLine.String())
-							currentLine.Reset()
-						}
-						oldLine++
-						newLine++
-					}
-				}
-				idx1++
-				idx2++
-				i++
-				continue
-			}
-
 			// Find the run of consecutive Equal tokens
 			runStart := i
 			for i < len(diffs) && diffs[i].Type == Equal {
 				i++
 			}
-			runEnd := i
-			runTokenCount := runEnd - runStart
-
-			// Extract original text from text2 using positions
-			if idx2 < len(result.Positions2) && idx2+runTokenCount-1 < len(result.Positions2) {
-				startPos := result.Positions2[idx2].Start
-				if idx2 == 0 && currentLine.Len() == 0 && startPos > 0 {
-					startPos = 0
-				}
-				endPos := result.Positions2[idx2+runTokenCount-1].End
-
-				if lastText2Pos > 0 && startPos > lastText2Pos {
-					gap := result.Text2[lastText2Pos:startPos]
-					writeContent(gap, Equal)
-				}
-
-				original := result.Text2[startPos:endPos]
-				writeContent(original, Equal)
-				lastText2Pos = endPos
-			} else {
-				for j := runStart; j < runEnd; j++ {
-					if j > runStart {
-						if NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
-							writeContent(" ", Equal)
-						}
-					} else if currentLine.Len() > 0 && runStart > 0 {
-						prev := diffs[runStart-1]
-						if NeedsSpaceAfter(prev.Token) && NeedsSpaceBefore(diffs[j].Token) {
-							writeContent(" ", Equal)
-						}
-					}
-					writeContent(diffs[j].Token, Equal)
-				}
-			}
-			idx1 += runTokenCount
-			idx2 += runTokenCount
+			f.processEqualRun(diffs, runStart, i)
+			f.idx1 += i - runStart
+			f.idx2 += i - runStart
 
 		case Delete:
 			// Find consecutive Delete tokens
@@ -854,46 +960,8 @@ func FormatDiffResultAdvanced(result DiffResult, opts FormatOptions) string {
 			for i < len(diffs) && diffs[i].Type == Delete {
 				i++
 			}
-			runEnd := i
-
-			if currentLine.Len() > 0 && runStart > 0 {
-				prev := diffs[runStart-1]
-				adjacentChange := prev.Type == Insert
-				if !adjacentChange {
-					needSpace := false
-					if idx1 < len(result.Positions1) && idx1 > 0 {
-						prevEnd := result.Positions1[idx1-1].End
-						currStart := result.Positions1[idx1].Start
-						if currStart > prevEnd {
-							gap := result.Text1[prevEnd:currStart]
-							needSpace = strings.ContainsAny(gap, " \t\n\r")
-						}
-					} else {
-						needSpace = NeedsSpaceAfter(prev.Token) && NeedsSpaceBefore(diffs[runStart].Token)
-					}
-					if needSpace {
-						writeContent(" ", Equal)
-					}
-				}
-			}
-
-			// Extract original text from text1
-			if idx1 < len(result.Positions1) && idx1+runEnd-runStart-1 < len(result.Positions1) {
-				startPos := result.Positions1[idx1].Start
-				endPos := result.Positions1[idx1+runEnd-runStart-1].End
-				original := result.Text1[startPos:endPos]
-				formatted := formatNonEqualToken(Diff{Type: Delete, Token: original})
-				writeContent(formatted, Delete)
-			} else {
-				for j := runStart; j < runEnd; j++ {
-					if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
-						writeContent(" ", Delete)
-					}
-					formatted := formatNonEqualToken(diffs[j])
-					writeContent(formatted, Delete)
-				}
-			}
-			idx1 += runEnd - runStart
+			f.processDeleteRun(diffs, runStart, i)
+			f.idx1 += i - runStart
 
 		case Insert:
 			// Find consecutive Insert tokens
@@ -901,87 +969,10 @@ func FormatDiffResultAdvanced(result DiffResult, opts FormatOptions) string {
 			for i < len(diffs) && diffs[i].Type == Insert {
 				i++
 			}
-			runEnd := i
-
-			// Include gap before Insert
-			if idx2 < len(result.Positions2) {
-				insStart := result.Positions2[idx2].Start
-				if lastText2Pos > 0 && insStart > lastText2Pos {
-					gap := result.Text2[lastText2Pos:insStart]
-					for _, r := range gap {
-						if r == '\n' {
-							if opts.ShowLineNumbers {
-								thisLineEndedColored := false
-								if opts.UseColor && colorState != -1 {
-									currentLine.WriteString(opts.ClearToEOL)
-									thisLineEndedColored = true
-								}
-								prefix := linePrefix()
-								if prevLineEndedColored {
-									prefix = opts.ColorReset + prefix
-								}
-								lines = append(lines, prefix+currentLine.String())
-								currentLine.Reset()
-								prevLineEndedColored = thisLineEndedColored
-								if colorState != -1 {
-									if colorState == Delete {
-										currentLine.WriteString(opts.DeleteColor)
-									} else {
-										currentLine.WriteString(opts.InsertColor)
-									}
-								}
-							} else {
-								currentLine.WriteRune('\n')
-							}
-							newLine++
-						} else {
-							if opts.ShowLineNumbers && opts.UseColor && colorState != -1 {
-								currentLine.WriteString(opts.ColorReset)
-								colorState = -1
-							}
-							currentLine.WriteRune(r)
-						}
-					}
-				}
-			}
-
-			// Extract original text from text2
-			if idx2 < len(result.Positions2) && idx2+runEnd-runStart-1 < len(result.Positions2) {
-				startPos := result.Positions2[idx2].Start
-				endPos := result.Positions2[idx2+runEnd-runStart-1].End
-				original := result.Text2[startPos:endPos]
-				formatted := formatNonEqualToken(Diff{Type: Insert, Token: original})
-				writeContent(formatted, Insert)
-				lastText2Pos = endPos
-			} else {
-				for j := runStart; j < runEnd; j++ {
-					if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
-						writeContent(" ", Insert)
-					}
-					formatted := formatNonEqualToken(diffs[j])
-					writeContent(formatted, Insert)
-				}
-			}
-			idx2 += runEnd - runStart
+			f.processInsertRun(diffs, runStart, i)
+			f.idx2 += i - runStart
 		}
 	}
 
-	// Reset color at end if still active
-	if opts.UseColor && colorState != -1 {
-		currentLine.WriteString(opts.ColorReset)
-	}
-
-	// Output final line
-	if opts.ShowLineNumbers {
-		if currentLine.Len() > 0 || len(lines) == 0 {
-			lines = append(lines, linePrefix()+currentLine.String())
-		}
-		return strings.Join(lines, "\n")
-	}
-
-	if len(lines) > 0 {
-		lines = append(lines, currentLine.String())
-		return strings.Join(lines, "\n")
-	}
-	return currentLine.String()
+	return f.finalize()
 }

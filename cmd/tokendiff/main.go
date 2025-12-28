@@ -64,70 +64,86 @@ type config struct {
 	similarityThreshold float64 // minimum similarity for line pairing (0.0-1.0)
 }
 
-func main() {
-	// Pre-scan for --profile flag before defining other flags
-	profile := ""
+// cliFlags holds all parsed command-line flags
+type cliFlags struct {
+	delimiters     *string
+	whitespace     *string
+	usePunctuation *bool
+	noColor        *bool
+	colorSpec      *string
+	lineNumbers    *int
+	lineByLine     *bool
+	context        *int
+	stdinMode      *bool
+	help           *bool
+	version        *bool
+	startDelete    *string
+	stopDelete     *string
+	startInsert    *string
+	stopInsert     *string
+	repeatMarkers  *bool
+	lessMode       *bool
+	printerMode    *bool
+	noDeleted      *bool
+	noInserted     *bool
+	noCommon       *bool
+	statistics     *bool
+	ignoreCase     *bool
+	matchContext   *int
+	diffInput      *bool
+	algorithm      *string
+	threshold      *float64
+}
+
+// prescanProfile extracts --profile value before flag parsing
+func prescanProfile() string {
 	for i, arg := range os.Args[1:] {
 		if arg == "--profile" && i+1 < len(os.Args)-1 {
-			profile = os.Args[i+2]
-			break
+			return os.Args[i+2]
 		}
 		if strings.HasPrefix(arg, "--profile=") {
-			profile = strings.TrimPrefix(arg, "--profile=")
-			break
+			return strings.TrimPrefix(arg, "--profile=")
 		}
 	}
+	return ""
+}
 
-	// Load configuration from profile
-	configPath := findConfigFile(profile)
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config %s: %v\n", configPath, err)
-		os.Exit(exitError)
+// defineFlags sets up all command-line flags with config defaults
+func defineFlags(cfg config) cliFlags {
+	_ = flag.String("profile", "", "use settings from ~/.tokendiffrc.<profile>")
+
+	f := cliFlags{
+		delimiters:     flag.StringP("delimiters", "d", cfg.delimiters, "delimiter characters"),
+		whitespace:     flag.StringP("white-space", "W", cfg.whitespace, "whitespace characters"),
+		usePunctuation: flag.BoolP("punctuation", "P", cfg.usePunctuation, "use punctuation characters as delimiters"),
+		noColor:        flag.Bool("no-color", cfg.noColor, "disable colored output"),
+		colorSpec:      flag.StringP("color", "c", cfg.colorSpec, "set colors for deleted/inserted text (format: del_fg[:del_bg],ins_fg[:ins_bg], or 'list')"),
+		lineNumbers:    flag.IntP("line-numbers", "L", cfg.lineNumbers, "show line numbers with specified width (0 for auto-width)"),
+		lineByLine:     flag.Bool("line-mode", cfg.lineByLine, "compare files line by line"),
+		context:        flag.IntP("context", "C", cfg.context, "show N lines of context around changes (implies --line-mode)"),
+		stdinMode:      flag.Bool("stdin", false, "read first input from stdin, second from argument"),
+		help:           flag.BoolP("help", "h", false, "show help"),
+		version:        flag.BoolP("version", "v", false, "show version"),
+		startDelete:    flag.StringP("start-delete", "w", cfg.startDelete, "string to mark begin of deleted text"),
+		stopDelete:     flag.StringP("stop-delete", "x", cfg.stopDelete, "string to mark end of deleted text"),
+		startInsert:    flag.StringP("start-insert", "y", cfg.startInsert, "string to mark begin of inserted text"),
+		stopInsert:     flag.StringP("stop-insert", "z", cfg.stopInsert, "string to mark end of inserted text"),
+		repeatMarkers:  flag.BoolP("repeat-markers", "R", cfg.repeatMarkers, "repeat markers at line boundaries for multi-line changes"),
+		lessMode:       flag.BoolP("less-mode", "l", cfg.lessMode, "use overstrike to highlight text for less -r"),
+		printerMode:    flag.BoolP("printer", "p", cfg.printerMode, "use overstrike to highlight text for printing"),
+		noDeleted:      flag.BoolP("no-deleted", "1", cfg.noDeleted, "suppress printing of deleted words"),
+		noInserted:     flag.BoolP("no-inserted", "2", cfg.noInserted, "suppress printing of inserted words"),
+		noCommon:       flag.BoolP("no-common", "3", cfg.noCommon, "suppress printing of common words"),
+		statistics:     flag.BoolP("statistics", "s", cfg.statistics, "print statistics"),
+		ignoreCase:     flag.BoolP("ignore-case", "i", cfg.ignoreCase, "ignore case when comparing"),
+		matchContext:   flag.IntP("match-context", "m", cfg.matchContext, "minimum matching words between changes"),
+		diffInput:      flag.Bool("diff-input", false, "read unified diff from stdin and apply word-level diff"),
+		algorithm:      flag.StringP("algorithm", "A", cfg.algorithm, "line pairing algorithm: best (similarity), normal (positional), fast (positional)"),
+		threshold:      flag.Float64("threshold", cfg.similarityThreshold, "minimum similarity for line pairing with -A best (0.0-1.0)"),
 	}
 
-	// Define flags with config values as defaults
-	// Note: --profile is pre-scanned above, but we register it here for help output
-	_ = flag.String("profile", "", "use settings from ~/.tokendiffrc.<profile>")
-	delimiters := flag.StringP("delimiters", "d", cfg.delimiters, "delimiter characters")
-	whitespace := flag.StringP("white-space", "W", cfg.whitespace, "whitespace characters")
-	usePunctuation := flag.BoolP("punctuation", "P", cfg.usePunctuation, "use punctuation characters as delimiters")
-	noColor := flag.Bool("no-color", cfg.noColor, "disable colored output")
-	colorSpec := flag.StringP("color", "c", cfg.colorSpec, "set colors for deleted/inserted text (format: del_fg[:del_bg],ins_fg[:ins_bg], or 'list')")
 	flag.Lookup("color").NoOptDefVal = "default"
-	lineNumbers := flag.IntP("line-numbers", "L", cfg.lineNumbers, "show line numbers with specified width (0 for auto-width)")
 	flag.Lookup("line-numbers").NoOptDefVal = "0"
-	lineByLine := flag.Bool("line-mode", cfg.lineByLine, "compare files line by line")
-	context := flag.IntP("context", "C", cfg.context, "show N lines of context around changes (implies --line-mode)")
-	stdinMode := flag.Bool("stdin", false, "read first input from stdin, second from argument")
-	help := flag.BoolP("help", "h", false, "show help")
-	version := flag.BoolP("version", "v", false, "show version")
-
-	// Output marker customization
-	startDelete := flag.StringP("start-delete", "w", cfg.startDelete, "string to mark begin of deleted text")
-	stopDelete := flag.StringP("stop-delete", "x", cfg.stopDelete, "string to mark end of deleted text")
-	startInsert := flag.StringP("start-insert", "y", cfg.startInsert, "string to mark begin of inserted text")
-	stopInsert := flag.StringP("stop-insert", "z", cfg.stopInsert, "string to mark end of inserted text")
-	repeatMarkers := flag.BoolP("repeat-markers", "R", cfg.repeatMarkers, "repeat markers at line boundaries for multi-line changes")
-	lessMode := flag.BoolP("less-mode", "l", cfg.lessMode, "use overstrike to highlight text for less -r")
-	printerMode := flag.BoolP("printer", "p", cfg.printerMode, "use overstrike to highlight text for printing")
-
-	// Output suppression flags
-	noDeleted := flag.BoolP("no-deleted", "1", cfg.noDeleted, "suppress printing of deleted words")
-	noInserted := flag.BoolP("no-inserted", "2", cfg.noInserted, "suppress printing of inserted words")
-	noCommon := flag.BoolP("no-common", "3", cfg.noCommon, "suppress printing of common words")
-
-	// Statistics
-	statistics := flag.BoolP("statistics", "s", cfg.statistics, "print statistics")
-
-	// Comparison options
-	ignoreCase := flag.BoolP("ignore-case", "i", cfg.ignoreCase, "ignore case when comparing")
-	matchContext := flag.IntP("match-context", "m", cfg.matchContext, "minimum matching words between changes")
-	diffInput := flag.Bool("diff-input", false, "read unified diff from stdin and apply word-level diff")
-
-	// Line pairing algorithm options
-	algorithm := flag.StringP("algorithm", "A", cfg.algorithm, "line pairing algorithm: best (similarity), normal (positional), fast (positional)")
-	threshold := flag.Float64("threshold", cfg.similarityThreshold, "minimum similarity for line pairing with -A best (0.0-1.0)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] file1 file2\n", os.Args[0])
@@ -146,119 +162,55 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  2  error occurred\n")
 	}
 
-	flag.Parse()
+	return f
+}
 
-	if *version {
-		fmt.Printf("tokendiff version %s\n", Version)
-		os.Exit(exitIdentical)
+// showColorList prints available colors and exits
+func showColorList() {
+	fmt.Println("Available colors:")
+	colors := tokendiff.ColorNames()
+	if len(colors) > 8 {
+		fmt.Printf("  %s\n", strings.Join(colors[:8], ", "))
+		fmt.Printf("  %s\n", strings.Join(colors[8:], ", "))
+	} else {
+		fmt.Printf("  %s\n", strings.Join(colors, ", "))
 	}
+	fmt.Println("\nUsage: -c delete_color[:delete_bg],insert_color[:insert_bg]")
+	fmt.Println("Example: -c red,green")
+	fmt.Println("Example: -c brightred:white,brightgreen:black")
+	os.Exit(exitIdentical)
+}
 
-	if *help {
-		flag.Usage()
-		os.Exit(exitIdentical)
-	}
-
-	// Handle -c list
-	if *colorSpec == "list" {
-		fmt.Println("Available colors:")
-		colors := tokendiff.ColorNames()
-		// Print in two rows for readability
-		if len(colors) > 8 {
-			fmt.Printf("  %s\n", strings.Join(colors[:8], ", "))
-			fmt.Printf("  %s\n", strings.Join(colors[8:], ", "))
-		} else {
-			fmt.Printf("  %s\n", strings.Join(colors, ", "))
-		}
-		fmt.Println("\nUsage: -c delete_color[:delete_bg],insert_color[:insert_bg]")
-		fmt.Println("Example: -c red,green")
-		fmt.Println("Example: -c brightred:white,brightgreen:black")
-		os.Exit(exitIdentical)
-	}
-
-	// Parse color spec
-	deleteColor := defaultDeleteColor
-	insertColor := defaultInsertColor
-	if *colorSpec != "" && *colorSpec != "default" {
+// parseColorSpec parses the color specification and returns delete/insert colors
+func parseColors(colorSpec string) (deleteColor, insertColor string) {
+	deleteColor = defaultDeleteColor
+	insertColor = defaultInsertColor
+	if colorSpec != "" && colorSpec != "default" {
 		var err error
-		deleteColor, insertColor, err = tokendiff.ParseColorSpec(*colorSpec)
+		deleteColor, insertColor, err = tokendiff.ParseColorSpec(colorSpec)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(exitError)
 		}
 	}
+	return
+}
 
-	// Validate algorithm
-	switch *algorithm {
+// validateAlgorithm checks if the algorithm is valid
+func validateAlgorithm(algorithm string) {
+	switch algorithm {
 	case "best", "normal", "fast":
 		// valid
 	default:
-		fmt.Fprintf(os.Stderr, "Error: invalid algorithm %q (use best, normal, or fast)\n", *algorithm)
+		fmt.Fprintf(os.Stderr, "Error: invalid algorithm %q (use best, normal, or fast)\n", algorithm)
 		os.Exit(exitError)
 	}
+}
 
-	// Configure diff options
-	opts := tokendiff.Options{
-		Delimiters:         parseEscapeSequences(*delimiters),
-		Whitespace:         parseEscapeSequences(*whitespace),
-		UsePunctuation:     *usePunctuation,
-		IgnoreCase:         *ignoreCase,
-		PreserveWhitespace: false,
-	}
-
-	// Determine color output
-	useColor := !*noColor && os.Getenv("NO_COLOR") == "" && (isTerminal(os.Stdout) || *colorSpec != "")
-	if *lessMode || *printerMode {
-		useColor = false
-	}
-
-	// Build format options using the core library's FormatOptions
-	fmtOpts := tokendiff.FormatOptions{
-		StartDelete:      *startDelete,
-		StopDelete:       *stopDelete,
-		StartInsert:      *startInsert,
-		StopInsert:       *stopInsert,
-		NoDeleted:        *noDeleted,
-		NoInserted:       *noInserted,
-		NoCommon:         *noCommon,
-		UseColor:         useColor,
-		DeleteColor:      deleteColor,
-		InsertColor:      insertColor,
-		ColorReset:       tokendiff.ANSIReset,
-		ClearToEOL:       tokendiff.ANSIClearEOL,
-		RepeatMarkers:    *repeatMarkers,
-		LessMode:         *lessMode,
-		PrinterMode:      *printerMode,
-		MatchContext:     *matchContext,
-		HeuristicSpacing: true,
-	}
-
-	// Handle --diff-input mode
-	// Note: We can't easily determine if there were differences in this mode,
-	// so we exit with 0 (identical) on success. Users needing exit codes should
-	// use the normal file comparison mode.
-	if *diffInput {
-		if err := tokendiff.ProcessUnifiedDiff(os.Stdin, os.Stdout, opts, fmtOpts); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(exitError)
-		}
-		os.Exit(exitIdentical)
-	}
-
-	// Context implies line-by-line mode
-	if *context > 0 {
-		*lineByLine = true
-	}
-
-	// Line numbers imply line-by-line mode for correct output
-	// (whole-file mode with line numbers can produce incorrect word-level diffs)
-	if *lineNumbers >= 0 {
-		*lineByLine = true
-	}
-
-	// Get input texts
-	var text1, text2 string
-
-	if *stdinMode {
+// readInputTexts reads input from stdin or files
+func readInputTexts(stdinMode bool) (text1, text2 string) {
+	var err error
+	if stdinMode {
 		if flag.NArg() < 1 {
 			fmt.Fprintln(os.Stderr, "Error: -stdin mode requires one file argument")
 			os.Exit(exitError)
@@ -290,10 +242,106 @@ func main() {
 			os.Exit(exitError)
 		}
 	}
+	return
+}
+
+func main() {
+	// Pre-scan for --profile flag before defining other flags
+	profile := prescanProfile()
+
+	// Load configuration from profile
+	configPath := findConfigFile(profile)
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config %s: %v\n", configPath, err)
+		os.Exit(exitError)
+	}
+
+	// Define and parse flags
+	f := defineFlags(cfg)
+	flag.Parse()
+
+	if *f.version {
+		fmt.Printf("tokendiff version %s\n", Version)
+		os.Exit(exitIdentical)
+	}
+
+	if *f.help {
+		flag.Usage()
+		os.Exit(exitIdentical)
+	}
+
+	// Handle -c list
+	if *f.colorSpec == "list" {
+		showColorList()
+	}
+
+	// Parse color spec and validate algorithm
+	deleteColor, insertColor := parseColors(*f.colorSpec)
+	validateAlgorithm(*f.algorithm)
+
+	// Configure diff options
+	opts := tokendiff.Options{
+		Delimiters:         parseEscapeSequences(*f.delimiters),
+		Whitespace:         parseEscapeSequences(*f.whitespace),
+		UsePunctuation:     *f.usePunctuation,
+		IgnoreCase:         *f.ignoreCase,
+		PreserveWhitespace: false,
+	}
+
+	// Determine color output
+	useColor := !*f.noColor && os.Getenv("NO_COLOR") == "" && (isTerminal(os.Stdout) || *f.colorSpec != "")
+	if *f.lessMode || *f.printerMode {
+		useColor = false
+	}
+
+	// Build format options using the core library's FormatOptions
+	fmtOpts := tokendiff.FormatOptions{
+		StartDelete:      *f.startDelete,
+		StopDelete:       *f.stopDelete,
+		StartInsert:      *f.startInsert,
+		StopInsert:       *f.stopInsert,
+		NoDeleted:        *f.noDeleted,
+		NoInserted:       *f.noInserted,
+		NoCommon:         *f.noCommon,
+		UseColor:         useColor,
+		DeleteColor:      deleteColor,
+		InsertColor:      insertColor,
+		ColorReset:       tokendiff.ANSIReset,
+		ClearToEOL:       tokendiff.ANSIClearEOL,
+		RepeatMarkers:    *f.repeatMarkers,
+		LessMode:         *f.lessMode,
+		PrinterMode:      *f.printerMode,
+		MatchContext:     *f.matchContext,
+		HeuristicSpacing: true,
+	}
+
+	// Handle --diff-input mode
+	if *f.diffInput {
+		if err := tokendiff.ProcessUnifiedDiff(os.Stdin, os.Stdout, opts, fmtOpts); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(exitError)
+		}
+		os.Exit(exitIdentical)
+	}
+
+	// Context implies line-by-line mode
+	lineByLine := *f.lineByLine
+	if *f.context > 0 {
+		lineByLine = true
+	}
+
+	// Line numbers imply line-by-line mode for correct output
+	if *f.lineNumbers >= 0 {
+		lineByLine = true
+	}
+
+	// Get input texts
+	text1, text2 := readInputTexts(*f.stdinMode)
 
 	// Set line number display options
-	fmtOpts.ShowLineNumbers = *lineNumbers >= 0
-	if *lineNumbers == 0 {
+	fmtOpts.ShowLineNumbers = *f.lineNumbers >= 0
+	if *f.lineNumbers == 0 {
 		// Auto-calculate width based on file lengths
 		maxLines := max(strings.Count(text1, "\n"), strings.Count(text2, "\n")) + 1
 		fmtOpts.LineNumWidth = len(fmt.Sprintf("%d", maxLines))
@@ -301,17 +349,17 @@ func main() {
 			fmtOpts.LineNumWidth = 3
 		}
 	} else {
-		fmtOpts.LineNumWidth = *lineNumbers
+		fmtOpts.LineNumWidth = *f.lineNumbers
 	}
 
 	var st tokendiff.DiffStatistics
-	if *lineByLine {
-		output := tokendiff.DiffLineByLine(text1, text2, opts, fmtOpts, *algorithm, *threshold)
+	if lineByLine {
+		output := tokendiff.DiffLineByLine(text1, text2, opts, fmtOpts, *f.algorithm, *f.threshold)
 		st = output.Statistics
 
 		// Print with context or all lines
-		if *context > 0 {
-			printWithContext(output.Lines, *context, fmtOpts)
+		if *f.context > 0 {
+			printWithContext(output.Lines, *f.context, fmtOpts)
 		} else {
 			printLineResults(output.Lines, fmtOpts)
 		}
@@ -321,7 +369,7 @@ func main() {
 		fmt.Println(result.Formatted)
 	}
 
-	if *statistics {
+	if *f.statistics {
 		printStatistics(st)
 	}
 
@@ -587,25 +635,15 @@ func defaultConfig() config {
 	}
 }
 
-// applyConfigOption sets a config field based on key and value
-func applyConfigOption(cfg *config, key, value string) error {
+// applyStringOption handles string config options
+func applyStringOption(cfg *config, key, value string) bool {
 	switch key {
 	case "delimiters", "d":
 		cfg.delimiters = value
 	case "white-space", "W":
 		cfg.whitespace = value
-	case "punctuation", "P":
-		cfg.usePunctuation = parseBool(value)
-	case "no-color":
-		cfg.noColor = parseBool(value)
 	case "color", "c":
 		cfg.colorSpec = value
-	case "line-numbers", "L":
-		cfg.lineNumbers = parseInt(value, -1)
-	case "line-mode":
-		cfg.lineByLine = parseBool(value)
-	case "context", "C":
-		cfg.context = parseInt(value, 0)
 	case "start-delete", "w":
 		cfg.startDelete = value
 	case "stop-delete", "x":
@@ -614,6 +652,21 @@ func applyConfigOption(cfg *config, key, value string) error {
 		cfg.startInsert = value
 	case "stop-insert", "z":
 		cfg.stopInsert = value
+	default:
+		return false
+	}
+	return true
+}
+
+// applyBoolOption handles boolean config options
+func applyBoolOption(cfg *config, key, value string) bool {
+	switch key {
+	case "punctuation", "P":
+		cfg.usePunctuation = parseBool(value)
+	case "no-color":
+		cfg.noColor = parseBool(value)
+	case "line-mode":
+		cfg.lineByLine = parseBool(value)
 	case "repeat-markers", "R":
 		cfg.repeatMarkers = parseBool(value)
 	case "less-mode", "l":
@@ -630,8 +683,41 @@ func applyConfigOption(cfg *config, key, value string) error {
 		cfg.statistics = parseBool(value)
 	case "ignore-case", "i":
 		cfg.ignoreCase = parseBool(value)
+	default:
+		return false
+	}
+	return true
+}
+
+// applyIntOption handles integer config options
+func applyIntOption(cfg *config, key, value string) bool {
+	switch key {
+	case "line-numbers", "L":
+		cfg.lineNumbers = parseInt(value, -1)
+	case "context", "C":
+		cfg.context = parseInt(value, 0)
 	case "match-context", "m":
 		cfg.matchContext = parseInt(value, 0)
+	default:
+		return false
+	}
+	return true
+}
+
+// applyConfigOption sets a config field based on key and value
+func applyConfigOption(cfg *config, key, value string) error {
+	if applyStringOption(cfg, key, value) {
+		return nil
+	}
+	if applyBoolOption(cfg, key, value) {
+		return nil
+	}
+	if applyIntOption(cfg, key, value) {
+		return nil
+	}
+
+	// Special cases with validation
+	switch key {
 	case "algorithm", "A":
 		switch value {
 		case "best", "normal", "fast":
