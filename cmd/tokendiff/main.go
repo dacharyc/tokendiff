@@ -250,7 +250,11 @@ func main() {
 	profile := prescanProfile()
 
 	// Load configuration from profile
-	configPath := findConfigFile(profile)
+	configPath, err := findConfigFile(profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(exitError)
+	}
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config %s: %v\n", configPath, err)
@@ -550,16 +554,17 @@ func parseEscapeSequences(s string) string {
 }
 
 // findConfigFile returns the path to the config file for the given profile.
-func findConfigFile(profile string) string {
+// If a profile is specified but the file doesn't exist, it returns an error.
+func findConfigFile(profile string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", nil // No home dir, use defaults
 	}
 
 	if profile == "" {
 		path := filepath.Join(home, ".tokendiffrc")
 		if _, err := os.Stat(path); err == nil {
-			return path
+			return path, nil
 		}
 		xdgConfig := os.Getenv("XDG_CONFIG_HOME")
 		if xdgConfig == "" {
@@ -567,16 +572,17 @@ func findConfigFile(profile string) string {
 		}
 		path = filepath.Join(xdgConfig, "tokendiff", "config")
 		if _, err := os.Stat(path); err == nil {
-			return path
+			return path, nil
 		}
-		return ""
+		return "", nil // No default config found, use defaults
 	}
 
+	// Profile explicitly specified - file must exist
 	path := filepath.Join(home, ".tokendiffrc."+profile)
-	if _, err := os.Stat(path); err == nil {
-		return path
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("profile config file not found: %s", path)
 	}
-	return ""
+	return path, nil
 }
 
 // loadConfig reads a config file and returns the configuration.
@@ -673,11 +679,11 @@ func applyBoolOption(cfg *config, key, value string) bool {
 		cfg.lessMode = parseBool(value)
 	case "printer", "p":
 		cfg.printerMode = parseBool(value)
-	case "1":
+	case "no-deleted", "1":
 		cfg.noDeleted = parseBool(value)
-	case "2":
+	case "no-inserted", "2":
 		cfg.noInserted = parseBool(value)
-	case "3":
+	case "no-common", "3":
 		cfg.noCommon = parseBool(value)
 	case "statistics", "s":
 		cfg.statistics = parseBool(value)

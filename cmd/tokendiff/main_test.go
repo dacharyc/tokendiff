@@ -723,7 +723,10 @@ func TestFindConfigFile(t *testing.T) {
 	defer os.Setenv("XDG_CONFIG_HOME", origXDG)
 
 	t.Run("no config file exists", func(t *testing.T) {
-		result := findConfigFile("")
+		result, err := findConfigFile("")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != "" {
 			t.Errorf("expected empty string, got %q", result)
 		}
@@ -736,7 +739,10 @@ func TestFindConfigFile(t *testing.T) {
 		}
 		defer os.Remove(configPath)
 
-		result := findConfigFile("")
+		result, err := findConfigFile("")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != configPath {
 			t.Errorf("expected %q, got %q", configPath, result)
 		}
@@ -753,7 +759,10 @@ func TestFindConfigFile(t *testing.T) {
 		}
 		defer os.RemoveAll(filepath.Join(tmpHome, ".config"))
 
-		result := findConfigFile("")
+		result, err := findConfigFile("")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != configPath {
 			t.Errorf("expected %q, got %q", configPath, result)
 		}
@@ -777,7 +786,10 @@ func TestFindConfigFile(t *testing.T) {
 		}
 		defer os.RemoveAll(filepath.Join(tmpHome, ".config"))
 
-		result := findConfigFile("")
+		result, err := findConfigFile("")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != homeConfig {
 			t.Errorf("expected home config %q, got %q", homeConfig, result)
 		}
@@ -790,16 +802,19 @@ func TestFindConfigFile(t *testing.T) {
 		}
 		defer os.Remove(profileConfig)
 
-		result := findConfigFile("myprofile")
+		result, err := findConfigFile("myprofile")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != profileConfig {
 			t.Errorf("expected %q, got %q", profileConfig, result)
 		}
 	})
 
-	t.Run("profile not found returns empty", func(t *testing.T) {
-		result := findConfigFile("nonexistent")
-		if result != "" {
-			t.Errorf("expected empty string, got %q", result)
+	t.Run("profile not found returns error", func(t *testing.T) {
+		_, err := findConfigFile("nonexistent")
+		if err == nil {
+			t.Error("expected error for nonexistent profile, got nil")
 		}
 	})
 
@@ -818,7 +833,10 @@ func TestFindConfigFile(t *testing.T) {
 		os.Setenv("XDG_CONFIG_HOME", customXDG)
 		defer os.Unsetenv("XDG_CONFIG_HOME")
 
-		result := findConfigFile("")
+		result, err := findConfigFile("")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 		if result != configPath {
 			t.Errorf("expected %q, got %q", configPath, result)
 		}
