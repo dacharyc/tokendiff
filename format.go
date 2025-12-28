@@ -459,6 +459,7 @@ type diffFormatter struct {
 	prevLineEndedColor bool
 	oldLine            int
 	newLine            int
+	lastText1Pos       int
 	lastText2Pos       int
 	idx1               int
 	idx2               int
@@ -614,28 +615,67 @@ func (f *diffFormatter) processEqualRun(diffs []Diff, runStart, runEnd int) {
 	}
 }
 
-// processDeleteRun handles a run of consecutive Delete diffs.
-func (f *diffFormatter) processDeleteRun(diffs []Diff, runStart, runEnd int) {
-	if f.currentLine.Len() > 0 && runStart > 0 {
-		prev := diffs[runStart-1]
-		adjacentChange := prev.Type == Insert
-		if !adjacentChange {
-			needSpace := false
-			if f.idx1 < len(f.result.Positions1) && f.idx1 > 0 {
-				prevEnd := f.result.Positions1[f.idx1-1].End
-				currStart := f.result.Positions1[f.idx1].Start
-				if currStart > prevEnd {
-					gap := f.result.Text1[prevEnd:currStart]
-					needSpace = strings.ContainsAny(gap, " \t\n\r")
+// processDeleteGap handles the gap before a Delete run.
+func (f *diffFormatter) processDeleteGap() {
+	if f.idx1 >= len(f.result.Positions1) {
+		return
+	}
+	delStart := f.result.Positions1[f.idx1].Start
+
+	// Determine the starting position for gap extraction
+	gapStart := f.lastText1Pos
+
+	// Special case: if this is the first text1 content and there's leading whitespace,
+	// start from position 0 to capture it (mirrors Equal's handling)
+	if f.lastText1Pos <= 0 && f.currentLine.Len() == 0 && delStart > 0 {
+		gapStart = 0
+	}
+
+	// Skip if no gap to process
+	if delStart <= gapStart {
+		return
+	}
+
+	gap := f.result.Text1[gapStart:delStart]
+	for _, r := range gap {
+		if r == '\n' {
+			if f.opts.ShowLineNumbers {
+				thisLineEndedColored := false
+				if f.opts.UseColor && f.colorState != -1 {
+					f.currentLine.WriteString(f.opts.ClearToEOL)
+					thisLineEndedColored = true
+				}
+				prefix := f.linePrefix()
+				if f.prevLineEndedColor {
+					prefix = f.opts.ColorReset + prefix
+				}
+				f.lines = append(f.lines, prefix+f.currentLine.String())
+				f.currentLine.Reset()
+				f.prevLineEndedColor = thisLineEndedColored
+				if f.colorState != -1 {
+					if f.colorState == Delete {
+						f.currentLine.WriteString(f.opts.DeleteColor)
+					} else {
+						f.currentLine.WriteString(f.opts.InsertColor)
+					}
 				}
 			} else {
-				needSpace = NeedsSpaceAfter(prev.Token) && NeedsSpaceBefore(diffs[runStart].Token)
+				f.currentLine.WriteRune('\n')
 			}
-			if needSpace {
-				f.writeContent(" ", Equal)
+			f.oldLine++
+		} else {
+			if f.opts.ShowLineNumbers && f.opts.UseColor && f.colorState != -1 {
+				f.currentLine.WriteString(f.opts.ColorReset)
+				f.colorState = -1
 			}
+			f.currentLine.WriteRune(r)
 		}
 	}
+}
+
+// processDeleteRun handles a run of consecutive Delete diffs.
+func (f *diffFormatter) processDeleteRun(diffs []Diff, runStart, runEnd int) {
+	f.processDeleteGap()
 
 	// Extract original text from text1
 	runLen := runEnd - runStart
@@ -645,6 +685,7 @@ func (f *diffFormatter) processDeleteRun(diffs []Diff, runStart, runEnd int) {
 		original := f.result.Text1[startPos:endPos]
 		formatted := formatNonEqualToken(Diff{Type: Delete, Token: original}, f.opts)
 		f.writeContent(formatted, Delete)
+		f.lastText1Pos = endPos
 	} else {
 		for j := runStart; j < runEnd; j++ {
 			if j > runStart && NeedsSpaceAfter(diffs[j-1].Token) && NeedsSpaceBefore(diffs[j].Token) {
@@ -662,11 +703,22 @@ func (f *diffFormatter) processInsertGap() {
 		return
 	}
 	insStart := f.result.Positions2[f.idx2].Start
-	if f.lastText2Pos <= 0 || insStart <= f.lastText2Pos {
+
+	// Determine the starting position for gap extraction
+	gapStart := f.lastText2Pos
+
+	// Special case: if this is the first text2 content and there's leading whitespace,
+	// start from position 0 to capture it (mirrors Equal's handling in writeEqualFromPositions)
+	if f.lastText2Pos <= 0 && f.currentLine.Len() == 0 && insStart > 0 {
+		gapStart = 0
+	}
+
+	// Skip if no gap to process
+	if insStart <= gapStart {
 		return
 	}
 
-	gap := f.result.Text2[f.lastText2Pos:insStart]
+	gap := f.result.Text2[gapStart:insStart]
 	for _, r := range gap {
 		if r == '\n' {
 			if f.opts.ShowLineNumbers {

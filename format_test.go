@@ -1584,3 +1584,88 @@ func TestFormatDiffResultAdvancedGapInText2(t *testing.T) {
 		t.Errorf("Should output tokens, got %q", output)
 	}
 }
+
+// TestLeadingWhitespaceInInsert tests that leading whitespace is preserved for Insert operations
+func TestLeadingWhitespaceInInsert(t *testing.T) {
+	// Scenario: deleting "old" and inserting "    new" (with leading spaces)
+	result := DiffResult{
+		Text1: "old",
+		Text2: "    new", // 4 spaces before "new"
+		Diffs: []Diff{
+			{Type: Delete, Token: "old"},
+			{Type: Insert, Token: "new"},
+		},
+		Positions1: []TokenPos{{0, 3}},
+		Positions2: []TokenPos{{4, 7}}, // "new" starts at position 4
+	}
+
+	opts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+	output := FormatDiffResultAdvanced(result, opts)
+
+	// The 4 leading spaces should be preserved before the insert marker
+	if !strings.Contains(output, "    {+new+}") {
+		t.Errorf("Leading whitespace should be preserved for Insert, got %q", output)
+	}
+}
+
+// TestLeadingWhitespaceInDelete tests that leading whitespace is preserved for Delete operations
+func TestLeadingWhitespaceInDelete(t *testing.T) {
+	// Scenario: deleting "    old" (with leading spaces) and inserting "new"
+	result := DiffResult{
+		Text1: "    old", // 4 spaces before "old"
+		Text2: "new",
+		Diffs: []Diff{
+			{Type: Delete, Token: "old"},
+			{Type: Insert, Token: "new"},
+		},
+		Positions1: []TokenPos{{4, 7}}, // "old" starts at position 4
+		Positions2: []TokenPos{{0, 3}},
+	}
+
+	opts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+	output := FormatDiffResultAdvanced(result, opts)
+
+	// The 4 leading spaces should be preserved before the delete marker
+	if !strings.Contains(output, "    [-old-]") {
+		t.Errorf("Leading whitespace should be preserved for Delete, got %q", output)
+	}
+}
+
+// TestMultiSpacePreservationInDelete tests that multiple spaces between tokens are preserved
+func TestMultiSpacePreservationInDelete(t *testing.T) {
+	// Scenario: deleting "hello    world" with multiple spaces
+	result := DiffResult{
+		Text1: "hello    world", // 4 spaces between
+		Text2: "goodbye",
+		Diffs: []Diff{
+			{Type: Delete, Token: "hello"},
+			{Type: Delete, Token: "world"},
+			{Type: Insert, Token: "goodbye"},
+		},
+		Positions1: []TokenPos{{0, 5}, {9, 14}}, // Gap from 5-9 (4 spaces)
+		Positions2: []TokenPos{{0, 7}},
+	}
+
+	opts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+	output := FormatDiffResultAdvanced(result, opts)
+
+	// The original spacing between deleted tokens should be preserved
+	if !strings.Contains(output, "[-hello    world-]") {
+		t.Errorf("Multiple spaces should be preserved in Delete, got %q", output)
+	}
+}
