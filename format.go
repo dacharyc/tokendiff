@@ -581,6 +581,13 @@ func (f *diffFormatter) writeEqualFromPositions(runTokenCount int) {
 
 	f.writeContent(f.result.Text2[startPos:endPos], Equal)
 	f.lastText2Pos = endPos
+
+	// Also update lastText1Pos to prevent Delete gaps from re-outputting
+	// Equal content that was already written from text2.
+	// Equal tokens exist in both texts at corresponding positions.
+	if f.idx1 < len(f.result.Positions1) && f.idx1+runTokenCount-1 < len(f.result.Positions1) {
+		f.lastText1Pos = f.result.Positions1[f.idx1+runTokenCount-1].End
+	}
 }
 
 // writeEqualTokensFallback writes Equal tokens with heuristic spacing.

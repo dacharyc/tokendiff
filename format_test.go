@@ -1669,3 +1669,85 @@ func TestMultiSpacePreservationInDelete(t *testing.T) {
 		t.Errorf("Multiple spaces should be preserved in Delete, got %q", output)
 	}
 }
+
+// TestEqualBeforeDeleteNotDuplicated tests that Equal content is not duplicated
+// when followed by Delete operations. This is a regression test for a bug where
+// Equal tokens were being output twice: once from text2 in writeEqualFromPositions,
+// and again from text1 in processDeleteGap because lastText1Pos wasn't updated.
+func TestEqualBeforeDeleteNotDuplicated(t *testing.T) {
+	text1 := "commit abc123"
+	text2 := "commit def456"
+	opts := DefaultOptions()
+	result := DiffStringsWithPositions(text1, text2, opts)
+
+	fmtOpts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+
+	output := FormatDiffResultAdvanced(result, fmtOpts)
+
+	// "commit" should appear exactly once, not twice (commitcommit)
+	count := strings.Count(output, "commit")
+	if count != 1 {
+		t.Errorf("'commit' should appear exactly once, found %d times in: %q", count, output)
+	}
+
+	// The output should have the correct format (space between delete and insert)
+	expected := "commit [-abc123-] {+def456+}"
+	if output != expected {
+		t.Errorf("Expected %q, got %q", expected, output)
+	}
+}
+
+// TestEqualBetweenChangesNotDuplicated tests that Equal tokens sandwiched
+// between Delete/Insert operations are not duplicated.
+func TestEqualBetweenChangesNotDuplicated(t *testing.T) {
+	text1 := "old1 middle old2"
+	text2 := "new1 middle new2"
+	opts := DefaultOptions()
+	result := DiffStringsWithPositions(text1, text2, opts)
+
+	fmtOpts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+
+	output := FormatDiffResultAdvanced(result, fmtOpts)
+
+	// "middle" should appear exactly once
+	count := strings.Count(output, "middle")
+	if count != 1 {
+		t.Errorf("'middle' should appear exactly once, found %d times in: %q", count, output)
+	}
+}
+
+// TestMultipleEqualBeforeDeleteNotDuplicated tests multiple Equal tokens
+// before a Delete are all preserved correctly without duplication.
+func TestMultipleEqualBeforeDeleteNotDuplicated(t *testing.T) {
+	text1 := "one two three old"
+	text2 := "one two three new"
+	opts := DefaultOptions()
+	result := DiffStringsWithPositions(text1, text2, opts)
+
+	fmtOpts := FormatOptions{
+		StartDelete: "[-",
+		StopDelete:  "-]",
+		StartInsert: "{+",
+		StopInsert:  "+}",
+	}
+
+	output := FormatDiffResultAdvanced(result, fmtOpts)
+
+	// Each equal word should appear exactly once
+	for _, word := range []string{"one", "two", "three"} {
+		count := strings.Count(output, word)
+		if count != 1 {
+			t.Errorf("%q should appear exactly once, found %d times in: %q", word, count, output)
+		}
+	}
+}
